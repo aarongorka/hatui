@@ -1,0 +1,73 @@
+Screen {
+  layout: grid;
+  grid-size: 4;
+  grid-columns: 1fr;
+  grid-rows: auto;
+  # grid-gutter: 1;
+
+  # layout: vertical;
+}
+
+/*
+Unused due to https://github.com/Textualize/textual/discussions/3250
+.group {
+  width: auto;
+  max-width: 100;
+  height: auto;
+  background: $surface;
+  padding: 0 1;
+  margin: 1 1;
+  border: solid $accent;
+}
+*/
+
+.title {
+  width: 1fr;
+  text-style: bold;
+  # height: auto;
+  border: solid $primary;
+  # background: $panel;
+  background: $surface;
+  content-align: center middle;
+}
+
+.entity-horizontal {
+  width: 1fr;
+  height: auto;
+  border: solid $secondary;
+  background: $surface;
+}
+
+.icon {
+  content-align: left middle;
+  width: auto;
+  height: 1;
+  padding-left: 1;
+  /* color: $text; */
+}
+
+.name {
+  content-align: center middle;
+  text-align: center;
+  height: 1;
+  width: 1fr;
+}
+
+.state {
+  content-align: right middle;
+  width: auto;
+  height: 1;
+  padding-right: 1;
+  color: $text;
+}
+
+.state-on {
+}
+
+.state-off {
+  color: $foreground-muted
+}
+
+.state-button {
+  color: $text-primary
+}
