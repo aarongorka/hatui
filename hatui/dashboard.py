@@ -213,11 +213,11 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                             icon_widget.classes = icon_classes
                             icon_widget.styles.color = icon_colour
 
-                            logger.debug("Animating entity: %s", wid)
-                            entity_widget.styles.opacity = 0.1
-                            entity_widget.styles.animate(
-                                "opacity", value=1.0, duration=2.0
-                            )
+                            # logger.debug("Animating entity: %s", wid)
+                            # entity_widget.styles.opacity = 0.1
+                            # entity_widget.styles.animate(
+                            #     "opacity", value=1.0, duration=2.0
+                            # )
                     logger.debug("Updates finished, unpausing paints.")
             logger.debug("Finished entity state updates, sleeping for 5s...")
             await asyncio.sleep(5)
