@@ -12,7 +12,6 @@ logging.basicConfig(
     handlers=[TextualHandler()],
 )
 logger = logging.getLogger(__name__)
-logging.getLogger("backoff").addHandler(TextualHandler())
 
 url = os.environ["HATUI_WS_URL"]
 token = os.environ["HATUI_TOKEN"]

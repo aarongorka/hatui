@@ -3,14 +3,11 @@ name = "hatui"
 version = "0.1.0"
 description = "A Terminal User Interface (TUI) Home Assistant dashboard using the Textual library."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
-    "backoff>=2.2.1",
-    "homeassistant>=2025.12.0",
     "humanize>=4.14.0",
     "nerdfont>=3.4.0.post1",
     "pydantic>=2.12.5",
-    "requests>=2.32.5",
     "textual>=6.7.1",
     "websockets>=15.0.1",
 ]
