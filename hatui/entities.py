@@ -2,7 +2,6 @@ import json
 import logging
 
 import websockets.sync.client as ws
-from pydantic.type_adapter import TypeAdapter
 from websockets.sync.connection import Connection
 
 from .hatui_types import (
@@ -35,6 +34,15 @@ from .helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    from pydantic.type_adapter import TypeAdapter
+except ImportError:
+    logger.warning(
+        "Could not import pydantic, continuing without request/response validation."
+    )
+    TypeAdapter = None
 
 
 class HomeAssistant:
@@ -89,8 +97,11 @@ class HomeAssistant:
             }
             websocket.send(json.dumps(command))
             r = websocket.recv()
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Icons])
-            data = adapter.validate_python(json.loads(r))
+            if TypeAdapter:
+                adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Icons])
+                data = adapter.validate_python(json.loads(r))
+            else:
+                data = json.loads(r)
             check_response(data)
             result = data["result"]
             result_resources = result["resources"]
@@ -108,8 +119,13 @@ class HomeAssistant:
         websocket = ws.connect(url)
 
         r = websocket.recv()
-        auth_required_adapter = TypeAdapter(HomeAssistantWebsocketAuthRequiredResponse)
-        data = auth_required_adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            auth_required_adapter = TypeAdapter(
+                HomeAssistantWebsocketAuthRequiredResponse
+            )
+            data = auth_required_adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
 
         auth = {
             "type": "auth",
@@ -117,8 +133,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(auth))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketAuthResponse)
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketAuthResponse)
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         if not data.get("type") == "auth_ok":
             logger.error("Auth failed", r)
             raise Exception("Auth failed")
@@ -144,8 +163,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Config])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Config])
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         result = data["result"]
         return result
@@ -162,8 +184,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Entities])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Entities])
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         entities: list[Entity] = data.get("result", [])
         filtered_entities = filter_entities(entities)
@@ -182,8 +207,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[States])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[States])
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         result = data.get("result", [])
         logger.debug("States: %s", result)
@@ -201,8 +229,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Devices])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Devices])
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         return data["result"]
 
@@ -214,8 +245,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketSubscribeResponse)
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketSubscribeResponse)
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
 
     def wait_for_entities_update(
@@ -224,10 +258,13 @@ class HomeAssistant:
         try:
             r = websocket.recv(timeout=0)
             logger.debug("Subscribe response: %s", r)
-            adapter = TypeAdapter(
-                HomeAssistantWebsocketEventResponse[SubscribeEntitiesEvent]
-            )
-            data = adapter.validate_python(json.loads(r))
+            if TypeAdapter:
+                adapter = TypeAdapter(
+                    HomeAssistantWebsocketEventResponse[SubscribeEntitiesEvent]
+                )
+                data = adapter.validate_python(json.loads(r))
+            else:
+                data = json.loads(r)
             check_response(data, "event")
             event = data["event"]
             return event
@@ -246,8 +283,11 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Areas])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Areas])
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         areas = data["result"]
         return areas
@@ -268,8 +308,13 @@ class HomeAssistant:
         }
         websocket.send(json.dumps(command))
         r = websocket.recv()
-        adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[ServiceResponse])
-        data = adapter.validate_python(json.loads(r))
+        if TypeAdapter:
+            adapter = TypeAdapter(
+                HomeAssistantWebsocketCommandResponse[ServiceResponse]
+            )
+            data = adapter.validate_python(json.loads(r))
+        else:
+            data = json.loads(r)
         check_response(data)
         return None
 

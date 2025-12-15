@@ -7,7 +7,6 @@ requires-python = ">=3.13"
 dependencies = [
     "humanize>=4.14.0",
     "nerdfont>=3.4.0.post1",
-    "pydantic>=2.12.5",
     "textual>=6.7.1",
     "websockets>=15.0.1",
 ]
@@ -21,3 +20,8 @@ dev = [
 
 [project.scripts]
 hatui = "hatui:run"
+
+[project.optional-dependencies]
+pydantic = [
+    "pydantic>=2.12.5",
+]
