@@ -19,7 +19,7 @@ dev = [
 ]
 
 [project.scripts]
-hatui = "hatui:run"
+hatui = "hatui.main:run"
 
 [project.optional-dependencies]
 pydantic = [
