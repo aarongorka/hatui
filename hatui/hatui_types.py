@@ -44,6 +44,17 @@ type HomeAssistantWebsocketResponse[T] = (
 )
 
 
+class ConfigUnitSystem(TypedDict):
+    length: str
+    accumulated_precipitation: str
+    area: str
+    mass: str
+    pressure: str
+    temperature: str
+    volume: str
+    wind_speed: str
+
+
 class Config(TypedDict):
     allowlist_external_dirs: list[str]
     allowlist_external_urls: list[str]
@@ -67,17 +78,6 @@ class Config(TypedDict):
     unit_system: ConfigUnitSystem
     version: str
     whitelist_external_dirs: list[str]
-
-
-class ConfigUnitSystem(TypedDict):
-    length: str
-    accumulated_precipitation: str
-    area: str
-    mass: str
-    pressure: str
-    temperature: str
-    volume: str
-    wind_speed: str
 
 
 class Device(TypedDict):
