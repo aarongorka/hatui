@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, Literal, NotRequired, TypedDict
 
 type HomeAssistantWebsocketResponseType = Literal["result", "event"]
@@ -8,10 +9,16 @@ class HomeAssistantWebsocketAuthRequiredResponse(TypedDict):
     ha_version: str
 
 
+class HomeAssistantWebsocketError(TypedDict):
+    code: str
+    message: str
+
+
 class HomeAssistantWebsocketAuthResponse(TypedDict):
     type: str
     ha_version: NotRequired[str]
     message: NotRequired[str]
+    error: NotRequired[HomeAssistantWebsocketError]
 
 
 class HomeAssistantWebsocketCommandResponse[T](TypedDict):
@@ -19,6 +26,7 @@ class HomeAssistantWebsocketCommandResponse[T](TypedDict):
     type: str
     success: bool
     result: T
+    error: NotRequired[HomeAssistantWebsocketError]
 
 
 class HomeAssistantWebsocketSubscribeResponse(TypedDict):
@@ -26,12 +34,14 @@ class HomeAssistantWebsocketSubscribeResponse(TypedDict):
     type: str
     success: bool
     result: None
+    error: NotRequired[HomeAssistantWebsocketError]
 
 
 class HomeAssistantWebsocketEventResponse[T](TypedDict):
     id: int
     type: str
     event: T
+    error: NotRequired[HomeAssistantWebsocketError]
 
 
 type HomeAssistantWebsocketResponse[T] = (
@@ -42,6 +52,14 @@ type HomeAssistantWebsocketResponse[T] = (
     | HomeAssistantWebsocketSubscribeResponse
     | HomeAssistantWebsocketEventResponse[T]
 )
+
+
+class RequestExpectingResponseQueue(TypedDict):
+    id: int
+    callback: Callable[..., Any]
+
+
+type RequestsExpectingResponseQueue = list[RequestExpectingResponseQueue]
 
 
 class ConfigUnitSystem(TypedDict):
@@ -107,6 +125,10 @@ class Device(TypedDict):
 
 type Devices = list[Device]
 
+type StateClass = str | None
+type DeviceClass = str | None
+type UnitOfMeasurement = str | None
+
 
 class StateAttributes(TypedDict):
     friendly_name: NotRequired[str]
@@ -114,11 +136,11 @@ class StateAttributes(TypedDict):
     event_types: NotRequired[list[str]]
     event_type: NotRequired[str | None]
     options: NotRequired[list[str]]
-    device_class: NotRequired[str]
+    device_class: NotRequired[DeviceClass]
     icon: NotRequired[str]
     has_date: NotRequired[bool]
-    unit_of_measurement: NotRequired[str]
-    state_class: NotRequired[str]
+    unit_of_measurement: NotRequired[UnitOfMeasurement]
+    state_class: NotRequired[StateClass]
     supported_color_modes: NotRequired[list[str]]
     effect: NotRequired[str | None]
     color_mode: NotRequired[str | None]
@@ -197,11 +219,11 @@ class IconResourceType(TypedDict):
 type IconResourcesTypeName = str
 type IconResources = dict[IconResourcesTypeName, IconResourceType]
 type IconDomainName = str
-type IconDomains = dict[IconDomainName, IconResources]
+type Icons = dict[IconDomainName, IconResources]
 
 
-class Icons(TypedDict):
-    resources: IconDomains
+class IconsResponse(TypedDict):
+    resources: Icons
 
 
 class IconQuery(TypedDict):

@@ -5,7 +5,6 @@ import os
 from textual.logging import TextualHandler
 
 from .dashboard import HomeAssistantDashboard
-from .entities import HomeAssistant
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,6 +31,4 @@ def run():
 
 
 if __name__ == "__main__":
-    hass = HomeAssistant(url, token)
-    websocket = hass.websocket
-    # debuggy stuff goes here
+    run()

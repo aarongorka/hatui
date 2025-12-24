@@ -18,7 +18,7 @@ A Terminal User Interface (TUI) Home Assistant dashboard using the Textual libra
   * [ ] Full implementation of state translations
   * [ ] Translation of sensor group names
   * [ ] Ordering of groups identical to Lovelace
-  * [ ] Interactivity (requires a bit of a refactor to enable receiving out-of-order responses)
+  * [x] ~Interactivity (requires a bit of a refactor to enable receiving out-of-order responses)~ lights, buttons and switches are clickable
   * [ ] Refresh on adding/removing entities
   * [ ] Progress bar on first load
 
@@ -38,5 +38,5 @@ textual console --exclude 'EVENT'
 ```
 
 ```shell
-textual run --dev hatui.main:run
+textual run --dev hatui.main:get_dashboard
 ```

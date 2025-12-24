@@ -8,6 +8,7 @@ from textual.color import Color
 from .hatui_types import (
     Areas,
     Device,
+    DeviceClass,
     Devices,
     Entities,
     EntitiesByGroup,
@@ -17,8 +18,10 @@ from .hatui_types import (
     Icons,
     State,
     StateAttributes,
+    StateClass,
     States,
     SubscribeEntitiesEventEntityDetails,
+    UnitOfMeasurement,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,7 @@ def get_icon_for_state(
     resource_type: str | None = None,  # pyright: ignore[reportUnusedParameter]
     state: str | None = None,  # pyright: ignore[reportUnusedParameter]
 ) -> str | None:
-    resource_types = icons["resources"].get(domain_name)
+    resource_types = icons.get(domain_name)
     if not resource_types:
         return None
     default_resource_type = resource_types.get("_")  # TODO: use actual resource_type
@@ -61,6 +64,8 @@ def get_icon_for_state(
 
 
 def mdi_to_nerd_font_name(mdi_name: str) -> str | None:
+    """Attempt to translate from MDI's `mdi:some-thing` to nerdfont's `nf-md-some_thing`."""
+
     mdi_name_suffix = mdi_name.split(":", 1)[1]
     nf_name = f"nf-md-{mdi_name_suffix.replace('-', '_')}"
     if nerdfont.icons.get(nf_name):
@@ -150,6 +155,8 @@ def get_special_case_icon(entity_id: str):
 def get_icon_colour_and_classes(
     state: str | None, attributes: StateAttributes | None
 ) -> tuple[Color | None, str]:
+    """Based on the state and/or attributes, return an appropriate Textual Color and tcss class name to be associated with an icon."""
+
     if state == "off":
         return None, "icon icon-off"
 
@@ -163,6 +170,8 @@ def get_icon_colour_and_classes(
 
 
 def get_nf_icon_for_entity(icons: Icons, entity: Entity) -> str:
+    """For a given Entity, return the appropriate nerdfont glyph."""
+
     entity_id = entity["entity_id"]
     domain_name = get_domain_from_entity_id(entity_id)
     mdi_name = (
@@ -197,6 +206,8 @@ def get_integrations_from_components(components: list[str]) -> set[str]:
 
 
 def filter_entities(entities: Entities) -> Entities:
+    """Filter out entities from being displayed using the same/similar logic that Lovelace uses."""
+
     disabled_domains = [
         "stt",
         "tts",
@@ -369,12 +380,7 @@ def split_entities_by_group(
     }
 
 
-type StateClass = str | None
-type DeviceClass = str | None
-type UnitOfMeasurement = str | None
-
-
-def render_state(
+async def render_state(
     entity_id: str,
     state_raw: str | None,
     state_class: StateClass,
@@ -416,7 +422,7 @@ def render_state(
         try:
             parsed = int(state_raw)
             humanized = humanize.intcomma(parsed, 2)
-            return f"{humanized}{unit_of_measurement}"
+            return f"{humanized}{str(unit_of_measurement)}"
         except Exception:
             logger.debug(
                 'Couldn\'t parse state_value "%s" for entity %s as int, trying float...',
@@ -428,7 +434,7 @@ def render_state(
         try:
             parsed = float(state_raw)
             humanized = humanize.intcomma(parsed, 2)
-            return f"{humanized}{unit_of_measurement}"
+            return f"{humanized}{str(unit_of_measurement)}"
         except Exception:
             logger.warning(
                 'Couldn\'t parse state_value "%s" for entity %s as int or float, giving up.',
@@ -445,7 +451,7 @@ def render_state(
     return state_raw
 
 
-def get_state_classes(
+async def get_state_classes(
     state_rendered: str,
     state_raw: str | None = None,  # pyright: ignore[reportUnusedParameter]
     old_state_rendered: str | None = None,  # pyright: ignore[reportUnusedParameter]
@@ -507,3 +513,56 @@ def get_entity_from_entity_id(entity_id: str, entities: Entities) -> Entity:
 # ) -> str:
 #     """Idempotent method of adding a class to a list of classes."""
 #     return " ".join(set([*str(tcss_classes).split(" "), tcss_class]))
+
+
+def prettify_entity_id(entity_id: str, device_name: str | None = None) -> str:
+    if device_name:
+        logger.debug(
+            "Have device name (%s), using in construction of entity (%s) name",
+            device_name,
+            entity_id,
+        )
+        entity_id_without_domain = entity_id.split(".", 1)[1]
+        device_name_entity_idified = (
+            device_name.lower().replace(" ", "_").replace("-", "_")
+        )
+        if entity_id_without_domain == device_name_entity_idified:
+            return device_name
+        entity_id_without_device_name = entity_id_without_domain.replace(
+            f"{device_name_entity_idified}_", ""
+        )
+        return entity_id_without_device_name.replace("_", " ").title()
+    else:
+        return entity_id.split(".", 1)[1].replace("_", " ").title()
+
+
+def sanitise_for_widget_id(entity_id: str) -> str:
+    return (
+        entity_id.replace(".", "-")
+        .replace(":", "-")
+        .replace("/", "-")
+        .replace(" ", "-")
+        .lower()
+    )
+
+
+# TODO: this isn't exactly correct
+def generate_entity_name(entity: Entity, device: Device | None) -> str:
+    name = entity.get("name")
+    if name:
+        return name
+
+    original_name = entity.get("original_name")
+    entity_id = entity.get("entity_id")
+
+    if device:
+        device_name = device.get("name")
+        if original_name and device_name:
+            return f"{device_name} {original_name}"
+        else:
+            return prettify_entity_id(entity_id, device_name)
+    else:
+        if original_name:
+            return original_name
+        else:
+            return prettify_entity_id(entity_id)
