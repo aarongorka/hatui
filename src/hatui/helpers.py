@@ -50,16 +50,36 @@ def get_domain_from_entity_id(entity_id: str) -> str:
 def get_icon_for_state(
     icons: Icons,
     domain_name: str,
-    resource_type: str | None = None,  # pyright: ignore[reportUnusedParameter]
-    state: str | None = None,  # pyright: ignore[reportUnusedParameter]
+    resource_type: str | None = None,
+    state_raw: str | None = None,
 ) -> str | None:
     resource_types = icons.get(domain_name)
     if not resource_types:
         return None
-    default_resource_type = resource_types.get("_")  # TODO: use actual resource_type
+    logger.debug('Resource types in domain "%s": %s', domain_name, resource_types)
+    if resource_type:
+        specific_resource_type = resource_types.get(resource_type)
+        logger.debug(
+            'Available state icons for "%s": %s', resource_type, specific_resource_type
+        )
+        if specific_resource_type:
+            state_icons = specific_resource_type.get("state")
+            if state_icons and state_raw:
+                state_icon = state_icons.get(state_raw)
+                if state_icon:
+                    return state_icon
+            default_icon = specific_resource_type.get("default")
+            if default_icon:
+                return default_icon
+    default_resource_type = resource_types.get("_")
     if not default_resource_type:
         return None
-    default_icon = default_resource_type.get("default")  # TODO: use actual state
+    state_icons = default_resource_type.get("state")
+    if state_icons and state_raw:
+        state_icon = state_icons.get(state_raw)
+        if state_icon:
+            return state_icon
+    default_icon = default_resource_type.get("default")
     return default_icon
 
 
@@ -79,6 +99,9 @@ mdi_nf_mapping: dict[str, str] = {
     "mdi:button-pointer": "nf-md-gesture_tap_button",
     "mdi:radiobox-blank": "nf-fa-toggle_off",
     "mdi:radiobox-marked": "nf-fa-toggle_on",
+    "mdi:speaker-play": "nf-md-speaker",
+    "mdi:speaker-pause": "nf-md-speaker_off",
+    "mdi:speaker-stop": "nf-md-speaker_off",
 }
 
 # https://github.com/home-assistant/frontend/blob/4030ce3f889efb62f3bbfc025d5fdfa9509d5cb6/src/data/icons.ts#L72-L126
@@ -169,14 +192,19 @@ def get_icon_colour_and_classes(
     return None, "icon"
 
 
-def get_nf_icon_for_entity(icons: Icons, entity: Entity) -> str:
+def get_nf_icon_for_entity(
+    icons: Icons,
+    entity: Entity,
+    resource_type: str | None = None,
+    state: str | None = None,
+) -> str:
     """For a given Entity, return the appropriate nerdfont glyph."""
 
     entity_id = entity["entity_id"]
     domain_name = get_domain_from_entity_id(entity_id)
     mdi_name = (
         entity.get("icon")
-        or get_icon_for_state(icons, domain_name)
+        or get_icon_for_state(icons, domain_name, resource_type, state)
         or get_special_case_icon(entity_id)
     )
     if not mdi_name:
@@ -186,8 +214,11 @@ def get_nf_icon_for_entity(icons: Icons, entity: Entity) -> str:
     nf_name = mdi_nf_mapping.get(mdi_name) or mdi_to_nerd_font_name(mdi_name)
 
     if not nf_name:
-        logger.error("Failed to get nf icon name?", mdi_name)
-        raise Exception("Failed to nf icon name")
+        logger.error('Failed to get nf icon name? mdi_name: "%s"', mdi_name)
+        raise Exception(
+            "Failed to get nf icon name? Please report at https://github.com/aarongorka/hatui/issues. mdi_name:",
+            mdi_name,
+        )
 
     nf_glyph = nerdfont.icons.get(nf_name)
     if not nf_glyph:
@@ -208,17 +239,21 @@ def get_integrations_from_components(components: list[str]) -> set[str]:
 def filter_entities(entities: Entities) -> Entities:
     """Filter out entities from being displayed using the same/similar logic that Lovelace uses."""
 
+    #
     disabled_domains = [
+        "assist_satellite",
+        "automation",
+        "camera",
+        "device_tracker",
+        "event",
+        "script",
         "stt",
         "tts",
-        "event",
-        "automation",
         "update",
-        "device_tracker",
         "weather",
-        "assist_satellite",
-        "script",
     ]
+
+    # https://github.com/home-assistant/frontend/blob/ba213bf11cd69b0b9237994b70d13e583ebd0a69/src/panels/lovelace/common/generate-lovelace-config.ts#L37-L54
     hide_domains = [
         "device_tracker",
         "persistent_notification",
@@ -460,7 +495,7 @@ async def get_state_classes(
     if state_rendered == "Press":
         return "state state-button"
 
-    if state_rendered in ["unavailable" or "unknown"]:
+    if state_rendered in ["unavailable", "unknown", "Not Available"]:
         return "state state-unavailable"
 
     if state_rendered in ["off", "closed"]:
@@ -468,6 +503,9 @@ async def get_state_classes(
 
     if state_rendered in ["on", "open"]:
         return "state state-on"
+
+    if state_rendered in ["idle"]:
+        return "state state-idle"
 
     return "state"
 
@@ -566,3 +604,13 @@ def generate_entity_name(entity: Entity, device: Device | None) -> str:
             return original_name
         else:
             return prettify_entity_id(entity_id)
+
+
+def interpolate(x1: float, x2: float, y1: float, y2: float, x: float):
+    """Perform linear interpolation for x between (x1,y1) and (x2,y2)"""
+
+    return ((y2 - y1) * x + x2 * y1 - x1 * y2) / (x2 - x1)
+
+
+def reverse_easing(i: float) -> float:
+    return interpolate(0, 1, 1, 0, i)

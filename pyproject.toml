@@ -16,12 +16,12 @@ dev = [
     "basedpyright>=1.35.0",
     "ruff>=0.14.8",
     "textual-dev>=1.8.0",
+    "pydantic>=2.12.5",
 ]
 
 [project.scripts]
 hatui = "hatui.main:run"
 
-[project.optional-dependencies]
-pydantic = [
-    "pydantic>=2.12.5",
-]
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.1.0"]

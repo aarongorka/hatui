@@ -69,6 +69,7 @@ class EntityWidget(Horizontal):
             yield Static(id="name", classes="name")
             yield Static(id="state", classes="state")
 
+    # Magic Textual `watch_` functions that fire whenever their respective class attribute changes
     async def watch_entity(self, entity: Entity | None):
         if entity:
             device = self.device
@@ -82,13 +83,10 @@ class EntityWidget(Horizontal):
                 self.entity_name = generate_entity_name(entity, device)
 
     async def watch_icon(self, icon: str) -> None:
-        """Magic Textual function that fires whenever self.icon changes."""
         self.query_one("#icon", Static).update(icon)
 
     async def watch_entity_name(self, entity_name: str) -> None:
-        """Magic Textual function that fires whenever self.entity_name changes."""
         self.query_one("#name", Static).update(entity_name)
 
     async def watch_state_rendered(self, state_rendered: str) -> None:
-        """Magic Textual function that fires whenever self.state_rendered changes."""
         self.query_one("#state", Static).update(state_rendered)

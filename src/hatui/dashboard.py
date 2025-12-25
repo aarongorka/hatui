@@ -4,7 +4,6 @@ import logging
 from typing import final, override
 
 import websockets
-from pydantic.type_adapter import TypeAdapter
 from textual import work
 from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
@@ -51,11 +50,22 @@ from .helpers import (
     get_state_classes,
     get_state_from_entity,
     render_state,
+    reverse_easing,
     sanitise_for_widget_id,
     split_entities_by_group,
 )
 
 logger = logging.getLogger(__name__)
+
+try:
+    from pydantic.type_adapter import (
+        TypeAdapter,  # pyright: ignore[reportMissingImports, reportUnknownVariableType]
+    )
+
+    logger.info("Successfully imported pydantic.")
+except Exception:
+    logger.info("Could not import pydantic, running without it...")
+    TypeAdapter = None
 
 
 @final
@@ -279,17 +289,13 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         # self.states = states
         return states
 
-    async def get_devices(self, websocket: ClientConnection | None = None) -> Devices:
+    async def get_devices(self) -> Devices:
         try:
             if self.devices:
                 return self.devices
         except AttributeError:
             pass
-        if not websocket:
-            if self.websocket:
-                websocket = self.websocket
-            else:
-                raise Exception("Couldn't get websocket")
+        websocket = await self.get_websocket()
 
         command = {
             "id": self.get_and_increment_command_id(),
@@ -326,7 +332,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         self, response: HomeAssistantWebsocketEventResponse[SubscribeEntitiesEvent]
     ):
         if response.get("type") == "result" and response.get("success"):
-            logger.info("Got subscrition acknowledgement...")
+            logger.info("Got subscription acknowledgement...")
             return None
         else:
             return await self.update_dashboard_with_entity_updates(response["event"])
@@ -495,6 +501,10 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     continue
                 state_raw = details.get("s")
                 if not state_raw:
+                    logger.info(
+                        'No state in change for "%s", can\'t do anything with this.',
+                        wid,
+                    )
                     continue
                 state_rendered = await render_state(
                     entity_widget.entity_id,
@@ -509,13 +519,16 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 state_classes = await get_state_classes(
                     state_rendered, state_raw, old_state_rendered, old_state_raw
                 )
-                logger.debug("State class for %s is %s.", entity_id, state_classes)
 
-                logger.debug("Updating entity state: %s", wid)
-                entity_widget.state_rendered = state_rendered
+                if state_rendered != entity_widget.state_rendered:
+                    logger.debug('Updating entity "%s" with state "%s"', wid)
+                    entity_widget.state_rendered = state_rendered
 
-                logger.debug("Updating entity classes: %s", wid)
-                state_widget.classes = state_classes
+                if state_classes != "state" and state_classes != state_widget.classes:
+                    logger.info(
+                        'Updating entity "%s" with classes "%s"', wid, state_classes
+                    )
+                    state_widget.classes = state_classes
 
                 entity = entity_widget.entity
                 if not entity:
@@ -528,7 +541,8 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     logger.debug("No icons yet...")
                     continue
                     # raise Exception("No icons?")
-                icon = get_nf_icon_for_entity(icons, entity)
+                resource_type = entity_widget.device_class
+                icon = get_nf_icon_for_entity(icons, entity, resource_type, state_raw)
                 icon_colour, icon_classes = get_icon_colour_and_classes(
                     state_rendered, details.get("a")
                 )
@@ -539,22 +553,18 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 icon_widget.classes = icon_classes
                 icon_widget.styles.color = icon_colour
 
-                # TODO: fix animation
-                # logger.debug("Animating entity: %s", wid)
-                # entity_widget.styles.opacity = 0.1
-                # entity_widget.styles.animate(
-                #     "opacity", value=1.0, duration=2.0
-                # )
+                logger.debug("Animating entity: %s", wid)
+                entity_widget.styles.animate(
+                    "opacity",
+                    value=0.0,
+                    duration=2.0,
+                    final_value=1.0,
+                    easing=reverse_easing,
+                )
             logger.debug("Updates finished, unpausing paints.")
 
-    async def wait_for_responses[T](
-        self, websocket: ClientConnection | None
-    ) -> HomeAssistantWebsocketResponse[T] | None:
-        if not websocket:
-            if self.websocket:
-                websocket = self.websocket
-            else:
-                raise Exception("Couldn't get websocket")
+    async def wait_for_responses[T](self) -> HomeAssistantWebsocketResponse[T] | None:
+        websocket = await self.get_websocket()
 
         try:
             r = await websocket.recv()
@@ -578,10 +588,10 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             raise Exception("Could not get websocket.")
         while worker:
             logger.info("Checking for responses...")
-            while response := await self.wait_for_responses(self.websocket):
+            while response := await self.wait_for_responses():
                 await self.handle_response(response)
             logger.info("Finished checking for updates.")
-            await asyncio.sleep(5)
+            await asyncio.sleep(60)
 
     @override
     def compose(self) -> ComposeResult:
@@ -659,6 +669,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             _ = await self.get_websocket()
             await self.auth(self.token)
 
+        # TODO: is there a better way to have this data "lazy load"?
         if not self.entities:
             entities = await self.get_entities()
             logger.info("Startup sequence got %d entities.", len(entities))

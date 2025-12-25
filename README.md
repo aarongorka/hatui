@@ -6,6 +6,7 @@ A Terminal User Interface (TUI) Home Assistant dashboard using the Textual libra
 
 ## Features
 
+  * [x] Lightweight enough to run on a Raspberry Pi 1b
   * [x] Displays the same entities you see on the default Lovelace dashboard
   * [x] ~Entities grouped the same~ this isn't properly possible with Textual at the moment, but it's sort of implemented
   * [x] Entities display their friendly name
@@ -13,8 +14,8 @@ A Terminal User Interface (TUI) Home Assistant dashboard using the Textual libra
   * [x] Entities states update in realtime
   * [x] Entity icons are displayed (assumes you have Nerdfonts installed)
   * [x] Lights are coloured, same as the UI
-  * [ ] Animation on refresh (without colouring artefacts...)
-  * [ ] Full implementation of reactive icons
+  * [x] Animation on refresh ~(without colouring artefacts...)~
+  * [x] Full implementation of reactive icons
   * [ ] Full implementation of state translations
   * [ ] Translation of sensor group names
   * [ ] Ordering of groups identical to Lovelace

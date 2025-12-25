@@ -3,9 +3,6 @@ Screen {
   grid-size: 4;
   grid-columns: 1fr;
   grid-rows: auto;
-  # grid-gutter: 1;
-
-  # layout: vertical;
 }
 
 /*
@@ -24,9 +21,7 @@ Unused due to https://github.com/Textualize/textual/discussions/3250
 .title {
   width: 1fr;
   text-style: bold;
-  # height: auto;
   border: solid $primary;
-  # background: $panel;
   background: $surface;
   content-align: center middle;
 }
@@ -42,8 +37,7 @@ Unused due to https://github.com/Textualize/textual/discussions/3250
   content-align: left middle;
   width: auto;
   height: 1;
-  padding-left: 1;
-  /* color: $text; */
+  padding: 0 1;
 }
 
 .name {
@@ -57,7 +51,7 @@ Unused due to https://github.com/Textualize/textual/discussions/3250
   content-align: right middle;
   width: auto;
   height: 1;
-  padding-right: 1;
+  padding: 0 1;
   color: $text;
 }
 
@@ -65,6 +59,14 @@ Unused due to https://github.com/Textualize/textual/discussions/3250
 }
 
 .state-off {
+  color: $foreground-muted
+}
+
+.state-unavailable {
+  color: $foreground-muted
+}
+
+.state-idle {
   color: $foreground-muted
 }
 

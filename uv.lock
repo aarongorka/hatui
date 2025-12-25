@@ -231,7 +231,7 @@ wheels = [
 [[package]]
 name = "hatui"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "humanize" },
     { name = "nerdfont" },
@@ -239,14 +239,10 @@ dependencies = [
     { name = "websockets" },
 ]
 
-[package.optional-dependencies]
-pydantic = [
-    { name = "pydantic" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
+    { name = "pydantic" },
     { name = "ruff" },
     { name = "textual-dev" },
 ]
@@ -255,15 +251,14 @@ dev = [
 requires-dist = [
     { name = "humanize", specifier = ">=4.14.0" },
     { name = "nerdfont", specifier = ">=3.4.0.post1" },
-    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.12.5" },
     { name = "textual", specifier = ">=6.7.1" },
     { name = "websockets", specifier = ">=15.0.1" },
 ]
-provides-extras = ["pydantic"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.35.0" },
+    { name = "pydantic", specifier = ">=2.12.5" },
     { name = "ruff", specifier = ">=0.14.8" },
     { name = "textual-dev", specifier = ">=1.8.0" },
 ]
