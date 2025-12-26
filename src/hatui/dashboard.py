@@ -528,7 +528,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     logger.info(
                         'Updating entity "%s" with classes "%s"', wid, state_classes
                     )
-                    state_widget.classes = state_classes
+                state_widget.classes = state_classes
 
                 entity = entity_widget.entity
                 if not entity:
