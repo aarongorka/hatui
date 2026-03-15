@@ -479,11 +479,12 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
     async def update_dashboard_with_entity_updates(self, event: SubscribeEntitiesEvent):
         entity_additions = event.get("a", {})
         entity_changes = {k: v.get("+") for k, v in event.get("c", {}).items()}
-        logger.info(
-            "Got updates: %d additions and %d changes.",
-            len(entity_additions),
-            len(entity_changes),
-        )
+        if len(entity_additions) > 0 or len(entity_changes) > 1:
+            logger.info(
+                "Got updates: %d additions and %d changes.",
+                len(entity_additions),
+                len(entity_changes),
+            )
         entity_updates = entity_changes or entity_additions
         with (
             self.batch_update()

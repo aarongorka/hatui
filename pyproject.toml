@@ -8,6 +8,7 @@ dependencies = [
     "humanize>=4.14.0",
     "nerdfont>=3.4.0.post1",
     "textual>=6.7.1",
+    "typer>=0.21.1",
     "websockets>=15.0.1",
 ]
 
@@ -19,8 +20,12 @@ dev = [
     "pydantic>=2.12.5",
 ]
 
+[project.optional-dependencies]
+pydantic = [ "pydantic>=2.12.5" ]
+textual-dev = [ "textual-dev>=1.8.0" ]
+
 [project.scripts]
-hatui = "hatui.main:run"
+hatui = "hatui.main:app"
 
 [build-system]
 build-backend = "uv_build"

@@ -1,15 +1,12 @@
 #!/usr/bin/env python
 import logging
 import os
+from typing import Annotated
 
-from textual.logging import TextualHandler
+import typer
 
 from .dashboard import HomeAssistantDashboard
 
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[TextualHandler()],
-)
 logger = logging.getLogger(__name__)
 
 url = os.environ["HATUI_WS_URL"]
@@ -23,12 +20,32 @@ def get_dashboard():
     return dashboard
 
 
-def run():
+app = typer.Typer()
+
+
+@app.command()
+def run(
+    enable_file_logging: Annotated[
+        bool, typer.Option(help="Enable outputting logs to hatui.log")
+    ] = False,
+    debug: Annotated[bool, typer.Option(help="Enable debug logging")] = False,
+):
     """CLI entrypoint."""
+
+    if enable_file_logging:
+        handler = logging.FileHandler("hatui.log")
+
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+        root.addHandler(handler)
+
+    if debug:
+        root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
 
     dashboard = get_dashboard()
     _ = dashboard.run()
 
 
 if __name__ == "__main__":
-    run()
+    app()

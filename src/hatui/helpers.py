@@ -56,7 +56,6 @@ def get_icon_for_state(
     resource_types = icons.get(domain_name)
     if not resource_types:
         return None
-    logger.debug('Resource types in domain "%s": %s', domain_name, resource_types)
     if resource_type:
         specific_resource_type = resource_types.get(resource_type)
         logger.debug(
