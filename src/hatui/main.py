@@ -20,15 +20,21 @@ def get_dashboard():
     return dashboard
 
 
-app = typer.Typer()
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 @app.command()
 def run(
     enable_file_logging: Annotated[
-        bool, typer.Option(help="Enable outputting logs to hatui.log")
+        bool,
+        typer.Option(
+            help="Enable outputting logs to hatui.log",
+            envvar="HATUI_ENABLE_FILE_LOGGING",
+        ),
     ] = False,
-    debug: Annotated[bool, typer.Option(help="Enable debug logging")] = False,
+    debug: Annotated[
+        bool, typer.Option(help="Enable debug logging", envvar="HATUI_DEBUG")
+    ] = False,
 ):
     """CLI entrypoint."""
 
