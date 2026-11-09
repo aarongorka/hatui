@@ -1,58 +1,48 @@
-Screen {
-  layout: grid;
-  grid-size: 4;
-  grid-columns: 1fr;
-  grid-rows: auto;
+#cards {
+  width: 1fr;
+  height: 1fr;
+  padding: 0 1;
 }
 
-/*
-Unused due to https://github.com/Textualize/textual/discussions/3250
-.group {
-  width: auto;
-  max-width: 100;
+.group-card {
   height: auto;
+  border: round $primary;
+  border-title-color: $text;
+  border-title-style: bold;
   background: $surface;
   padding: 0 1;
-  margin: 1 1;
-  border: solid $accent;
-}
-*/
-
-.title {
-  width: 1fr;
-  text-style: bold;
-  border: solid $primary;
-  background: $surface;
-  content-align: center middle;
 }
 
-.entity-horizontal {
-  width: 1fr;
-  height: auto;
-  border: solid $secondary;
-  background: $surface;
+.entity-row {
+  width: 100%;
+  height: 1;
+}
+
+.entity-row:hover {
+  background: $boost;
 }
 
 .icon {
-  content-align: left middle;
-  width: auto;
+  width: 3;
   height: 1;
-  padding: 0 1;
+  content-align: left middle;
 }
 
 .name {
-  content-align: center middle;
-  text-align: center;
-  height: 1;
   width: 1fr;
+  height: 1;
+  text-wrap: nowrap;
+  text-overflow: ellipsis;
 }
 
 .state {
-  content-align: right middle;
   width: auto;
+  max-width: 50%;
   height: 1;
-  padding: 0 1;
+  padding-left: 1;
   color: $text;
+  text-wrap: nowrap;
+  text-overflow: ellipsis;
 }
 
 .state-on {
@@ -72,10 +62,6 @@ Unused due to https://github.com/Textualize/textual/discussions/3250
 
 .state-button {
   color: $text-primary
-}
-
-Screen.booting {
-    layout: vertical;
 }
 
 #loading {
@@ -104,4 +90,112 @@ Screen.booting {
     margin-top: 1;
     color: $text-muted;
     text-style: italic;
+}
+
+.camera {
+  height: auto;
+  width: 100%;
+}
+
+.camera .picture {
+  height: auto;
+  min-height: 3;
+  content-align: center middle;
+  text-align: center;
+  color: $foreground-muted;
+}
+
+CameraScreen {
+  align: center middle;
+}
+
+#camera-modal {
+  width: 90%;
+  height: 90%;
+  border: round $primary;
+  background: $surface;
+}
+
+#camera-modal .picture {
+  height: 1fr;
+}
+
+EntityModal {
+  align: center middle;
+}
+
+#more-info {
+  width: 80%;
+  max-width: 100;
+  height: 80%;
+  border: round $primary;
+  background: $surface;
+  padding: 0 2;
+}
+
+#more-info-title {
+  height: 2;
+  margin-top: 1;
+  color: $accent;
+}
+
+#more-info-state {
+  height: auto;
+  min-height: 3;
+  margin: 1 0;
+  padding: 0 1;
+  border: round $primary-darken-2;
+  background: $boost;
+  content-align: left middle;
+}
+
+#more-info-action {
+  margin-bottom: 1;
+}
+
+#more-info-details {
+  width: 100%;
+}
+
+#more-info-footer {
+  height: auto;
+  align: right middle;
+}
+
+.section {
+  text-style: bold;
+  color: $accent;
+  margin-top: 1;
+}
+
+.control-row {
+  height: 1;
+  margin-bottom: 1;
+}
+
+.control-label {
+  width: 14;
+}
+
+ClickBar {
+  width: 1fr;
+  height: 1;
+}
+
+#light-controls, #media-controls {
+  height: auto;
+}
+
+#media-buttons {
+  height: 3;
+}
+
+#media-buttons Button {
+  min-width: 6;
+  margin-right: 1;
+}
+
+#more-info-chart, #more-info-logbook, #weather-panel {
+  height: auto;
+  width: 100%;
 }

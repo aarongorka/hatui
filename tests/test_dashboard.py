@@ -72,12 +72,17 @@ async def test_reconnect_retries_then_resubscribes() -> None:
     async def subscribe() -> None:
         attempts.append("subscribe")
 
+    async def subscribe_registry() -> None:
+        attempts.append("registry")
+
     dashboard.connect = connect  # pyright: ignore[reportAttributeAccessIssue]
     dashboard.subscribe_to_all_entities = subscribe  # pyright: ignore[reportAttributeAccessIssue]
+    dashboard.subscribe_to_registry_updates = subscribe_registry  # pyright: ignore[reportAttributeAccessIssue]
+    dashboard.set_timer = lambda *a, **k: None  # pyright: ignore[reportAttributeAccessIssue]
 
     await dashboard.reconnect()
 
-    assert attempts == ["connect", "connect", "subscribe"]
+    assert attempts == ["connect", "connect", "subscribe", "registry"]
     assert dashboard.requests_expecting_response_queue == {}
 
 
@@ -130,3 +135,41 @@ async def test_connects_wss_with_and_without_insecure(tmp_path: Any) -> None:
         insecure = HomeAssistantDashboard(url, "t", insecure=True)
         websocket = await insecure.get_websocket()
         await websocket.close()
+
+
+async def test_refresh_layout_rebuilds_and_resubscribes_on_new_entity() -> None:
+    dashboard = HomeAssistantDashboard("ws://x", "token")
+    sent: list[dict[str, Any]] = []
+    subscribed: list[int] = []
+    light = {"entity_id": "light.a", "state": "on", "attributes": {}}
+    registry: list[dict[str, Any]] = [{"ei": "light.a", "en": "A"}]
+    states = [light]
+
+    async def request(command: dict[str, Any]) -> Any:
+        sent.append(command)
+        return {
+            "config/entity_registry/list_for_display": {"entities": registry},
+            "get_states": states,
+        }.get(command["type"], [])
+
+    async def subscribe() -> None:
+        subscribed.append(1)
+
+    dashboard.request = request  # pyright: ignore[reportAttributeAccessIssue]
+    dashboard.subscribe_to_all_entities = subscribe  # pyright: ignore[reportAttributeAccessIssue]
+    dashboard.notify = lambda *a, **k: None  # pyright: ignore[reportAttributeAccessIssue]
+    dashboard.entities_subscription_id = 7
+
+    await dashboard.refresh_layout()
+    assert dashboard.entity_widget_ids() == ["light.a"]
+    assert len(subscribed) == 1
+    assert {"type": "unsubscribe_events", "subscription": 7} in sent
+
+    await dashboard.refresh_layout()
+    assert len(subscribed) == 1  # unchanged layout is left alone
+
+    registry.append({"ei": "light.b", "en": "B"})
+    states.append({"entity_id": "light.b", "state": "off", "attributes": {}})
+    await dashboard.refresh_layout()
+    assert sorted(dashboard.entity_widget_ids()) == ["light.a", "light.b"]
+    assert len(subscribed) == 2

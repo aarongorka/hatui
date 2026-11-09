@@ -2,94 +2,94 @@ import logging
 from typing import final, override
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal
+from textual.color import Color
+from textual.events import Click
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
-from textual.reactive import reactive
+from textual.widget import Widget
 from textual.widgets import Static
 
-from hatui.hatui_types import (
-    Device,
-    DeviceClass,
-    Entity,
-    State,
-    StateClass,
-    UnitOfMeasurement,
-)
-
-from .helpers import (
-    generate_entity_name,
-)
+from .helpers import reverse_easing
+from .masonry import MasonryLayout
+from .present import Presentation
 
 logger = logging.getLogger(__name__)
 
 
 @final
 class EntityWidget(Horizontal):
-    icon = reactive("")
-    entity_name = reactive("")
-    state_rendered = reactive("")
+    """A single-line entity row: icon, name and state."""
 
-    def __init__(
-        self,
-        entity_id: str,
-        *args,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
-        **kwargs,  # pyright: ignore[reportUnknownParameterType, reportMissingParameterType]
-    ) -> None:
+    def __init__(self, entity_id: str, name: str, presentation: Presentation) -> None:
+        super().__init__(classes="entity-row")
         self.entity_id = entity_id
-
-        self.entity: Entity | None = None
-        self.device: Device | None = None
-        self.state: State | None = None
-        self.area_name: str | None = None
-        self.state_raw: str | None = None
-        self.device_class: DeviceClass | None = None
-        self.state_class: StateClass | None = None
-        self.unit_of_measurement: UnitOfMeasurement | None = None
-        self.icon_widget = Static(id="icon", classes="icon")
-        self.name_widget = Static(id="name", classes="name")
-        self.state_widget = Static(id="state", classes="state")
-        super().__init__(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
+        self.icon_widget = Static(presentation.icon, classes="icon", markup=False)
+        self.name_widget = Static(name, classes="name", markup=False)
+        self.state_widget = Static(
+            presentation.state_text, classes=presentation.state_classes, markup=False
+        )
+        self.presentation = presentation
+        self._apply_colour(presentation.colour)
 
     @final
     class Clicked(Message):
-        def __init__(self, entity_id: str):
+        def __init__(self, entity_id: str, quick_action: bool):
             self.entity_id = entity_id
+            self.quick_action = quick_action
             super().__init__()
 
-    async def on_click(self) -> None:
-        logger.info("Entity %s got clicked!", self.entity_id)
-
-        parent = self.parent
-        if parent:
-            _ = parent.post_message(self.Clicked(self.entity_id))
-        else:
-            raise Exception("Couldn't get parent?")
+    def on_click(self, event: Click) -> None:
+        # like Lovelace: the icon/state is the quick action, anywhere else opens more-info
+        quick = event.widget in (self.icon_widget, self.state_widget)
+        _ = self.post_message(self.Clicked(self.entity_id, quick))
 
     @override
     def compose(self) -> ComposeResult:
-        with Horizontal(id="entity-horizontal", classes="entity-horizontal"):
-            yield self.icon_widget
-            yield self.name_widget
-            yield self.state_widget
+        yield self.icon_widget
+        yield self.name_widget
+        yield self.state_widget
 
-    # Magic Textual `watch_` functions that fire whenever their respective class attribute changes
-    async def watch_entity(self, entity: Entity | None):
-        if entity:
-            device = self.device
-            if device:
-                self.entity_name = generate_entity_name(entity, device)
+    def _apply_colour(self, colour: str | None) -> None:
+        self.icon_widget.styles.color = Color.parse(colour) if colour else None
 
-    async def watch_device(self, device: Device | None):
-        if device:
-            entity = self.entity
-            if entity:
-                self.entity_name = generate_entity_name(entity, device)
+    def apply(self, presentation: Presentation, animate: bool) -> None:
+        """Update the row, fading it in only when something visible changed."""
 
-    async def watch_icon(self, icon: str) -> None:
-        self.icon_widget.update(icon)
+        previous = self.presentation
+        self.presentation = presentation
+        self.icon_widget.update(presentation.icon)
+        self.state_widget.update(presentation.state_text)
+        self.state_widget.classes = presentation.state_classes
+        self._apply_colour(presentation.colour)
 
-    async def watch_entity_name(self, entity_name: str) -> None:
-        self.name_widget.update(entity_name)
+        visible_change = (
+            previous.state_text != presentation.state_text
+            or previous.icon != presentation.icon
+            or previous.colour != presentation.colour
+        )
+        if animate and visible_change and self.is_mounted:
+            _ = self.styles.animate(
+                "opacity",
+                value=0.0,
+                duration=2.0,
+                final_value=1.0,
+                easing=reverse_easing,
+            )
 
-    async def watch_state_rendered(self, state_rendered: str) -> None:
-        self.state_widget.update(state_rendered)
+
+@final
+class GroupCard(Vertical):
+    """A titled, bordered group of entity rows."""
+
+    def __init__(self, title: str, *children: Widget) -> None:
+        super().__init__(*children, classes="group-card")
+        self.border_title = title
+
+
+@final
+class CardGrid(VerticalScroll):
+    """Scrolling container that lays cards out in responsive masonry columns."""
+
+    def __init__(self, *children: GroupCard) -> None:
+        super().__init__(*children, id="cards")
+        self.styles.layout = MasonryLayout()

@@ -13,10 +13,22 @@ url = os.environ["HATUI_WS_URL"]
 token = os.environ["HATUI_TOKEN"]
 
 
-def get_dashboard(insecure: bool = False):
+def get_dashboard(
+    insecure: bool = False,
+    show_cameras: bool = True,
+    camera_interval: float = 10.0,
+    camera_live_interval: float = 1.0,
+):
     """To be used with `textual run --dev main:run`"""
 
-    dashboard = HomeAssistantDashboard(url, token, insecure=insecure)
+    dashboard = HomeAssistantDashboard(
+        url,
+        token,
+        insecure=insecure,
+        show_cameras=show_cameras,
+        camera_interval=camera_interval,
+        camera_live_interval=camera_live_interval,
+    )
     return dashboard
 
 
@@ -42,6 +54,29 @@ def run(
             envvar="HATUI_INSECURE",
         ),
     ] = False,
+    cameras: Annotated[
+        bool,
+        typer.Option(
+            help="Show live ASCII-art camera feeds (disable on slow devices like a Pi 1)",
+            envvar="HATUI_CAMERAS",
+        ),
+    ] = True,
+    camera_interval: Annotated[
+        float,
+        typer.Option(
+            min=0.2,
+            help="Seconds between camera card refreshes",
+            envvar="HATUI_CAMERA_INTERVAL",
+        ),
+    ] = 10.0,
+    camera_live_interval: Annotated[
+        float,
+        typer.Option(
+            min=0.2,
+            help="Seconds between frames in the camera popup (click a camera)",
+            envvar="HATUI_CAMERA_LIVE_INTERVAL",
+        ),
+    ] = 1.0,
 ):
     """CLI entrypoint."""
 
@@ -56,7 +91,7 @@ def run(
         root = logging.getLogger()
         root.setLevel(logging.DEBUG)
 
-    dashboard = get_dashboard(insecure)
+    dashboard = get_dashboard(insecure, cameras, camera_interval, camera_live_interval)
     _ = dashboard.run()
 
 

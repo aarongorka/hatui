@@ -6,22 +6,24 @@ A Terminal User Interface (TUI) Home Assistant dashboard using the Textual libra
 
 ## Features
 
-  * [x] Lightweight enough to run on a Raspberry Pi 1b
+  * [x] Lightweight enough to run on a Raspberry Pi 1b (sort of, it's still slow)
   * [x] Displays the same entities you see on the default Lovelace dashboard
-  * [x] ~Entities grouped the same~ this isn't properly possible with Textual at the moment, but it's sort of implemented
+  * [x] Entities grouped the same
   * [x] Entities display their friendly name
   * [x] Most entity states are humanised and displayed with their units
   * [x] Entities states update in realtime
   * [x] Entity icons are displayed (assumes you have Nerdfonts installed)
   * [x] Lights are coloured, same as the UI
-  * [x] Animation on refresh ~(without colouring artefacts...)~
+  * [x] Animation on refresh
   * [x] Full implementation of reactive icons
-  * [ ] Full implementation of state translations
-  * [ ] Translation of sensor group names
-  * [ ] Ordering of groups identical to Lovelace
-  * [x] ~Interactivity (requires a bit of a refactor to enable receiving out-of-order responses)~ lights, buttons and switches are clickable
-  * [ ] Refresh on adding/removing entities
-  * [ ] Progress bar on first load
+  * [x] Full implementation of state translations
+  * [x] Translation of sensor group names
+  * [x] Ordering of groups identical to Lovelace
+  * [x] Most things are interactive
+  * [x] Refresh on adding/removing entities
+  * [x] Progress bar on first load
+  * [x] Popup modals with graphs
+  * [x] Image (e.g. webcam) entities converted to ASCII
 
 ## Usage
 
@@ -31,8 +33,6 @@ export HATUI_WS_URL=ws://<your HA hostname>:8123/api/websocket
 export HATUI_TOKEN=<token obtained from your profile on the left sidebar -> security tab -> long-lived access tokens>
 hatui
 ```
-
-For self-signed certificates or a TLS-intercepting proxy, use `wss://` with `--insecure` (or `HATUI_INSECURE=1`). This disables certificate verification.
 
 Or for debugging:
 

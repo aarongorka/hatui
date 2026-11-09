@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "humanize>=4.14.0",
     "nerdfont>=3.4.0.post1",
+    "pillow>=13.0.0",
     "textual>=6.7.1",
     "typer>=0.21.1",
     "websockets>=15.0.1",

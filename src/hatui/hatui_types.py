@@ -236,6 +236,7 @@ class SubscribeEntitiesEventEntityDetails(TypedDict):
     a: NotRequired[StateAttributes]
     c: NotRequired[Context]
     lc: NotRequired[float]  # last changed
+    lu: NotRequired[float]  # last updated
 
 
 type SubscribeEntitiesEventEntityId = str
@@ -261,6 +262,7 @@ type SubscribeEntitiesEventChangedEntities = dict[
 class SubscribeEntitiesEvent(TypedDict):
     a: NotRequired[SubscribeEntitiesEventAddedEntities]
     c: NotRequired[SubscribeEntitiesEventChangedEntities]
+    r: NotRequired[list[str]]  # removed entity ids
 
 
 class ServiceResponse(TypedDict):

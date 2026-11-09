@@ -7,17 +7,12 @@ from typing import Any
 import websockets
 
 from hatui.dashboard import HomeAssistantDashboard
-from hatui.entity_widget import EntityWidget
+from hatui.entity_widget import EntityWidget, GroupCard
 
-ENTITY: dict[str, Any] = {
-    "area_id": None, "categories": {}, "config_entry_id": None,
-    "config_subentry_id": None, "created_at": 0.0, "device_id": None,
-    "disabled_by": None, "entity_category": None, "entity_id": "light.desk",
-    "hidden_by": None, "icon": None, "id": "abc",
-    "labels": [], "modified_at": 0.0, "name": "Desk", "options": {},
-    "original_name": "Desk", "platform": "demo", "translation_key": None,
-    "unique_id": "u1",
-}  # fmt: skip
+DISPLAY_ENTITIES: dict[str, Any] = {
+    "entity_categories": {"0": "config"},
+    "entities": [{"ei": "light.desk", "pl": "demo", "en": "Desk"}],
+}
 
 STATE: dict[str, Any] = {
     "entity_id": "light.desk", "state": "on", "attributes": {},
@@ -39,12 +34,13 @@ CONFIG: dict[str, Any] = {
 }  # fmt: skip
 
 RESULTS: dict[str, Any] = {
-    "config/entity_registry/list": [ENTITY],
+    "config/entity_registry/list_for_display": DISPLAY_ENTITIES,
     "config/area_registry/list": [],
     "config/device_registry/list": [],
     "get_states": [STATE],
     "get_config": CONFIG,
     "frontend/get_icons": {"resources": {}},
+    "frontend/get_translations": {"resources": {}},
 }
 
 
@@ -93,3 +89,4 @@ async def test_app_starts_against_self_signed_wss_with_insecure(tmp_path: Path) 
             assert isinstance(widget, EntityWidget)
             assert widget.entity_id == "light.desk"
             assert not app.query("#loading")
+            assert len(app.query(GroupCard)) == 1
