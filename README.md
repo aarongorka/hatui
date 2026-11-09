@@ -32,6 +32,8 @@ export HATUI_TOKEN=<token obtained from your profile on the left sidebar -> secu
 hatui
 ```
 
+For self-signed certificates or a TLS-intercepting proxy, use `wss://` with `--insecure` (or `HATUI_INSECURE=1`). This disables certificate verification.
+
 Or for debugging:
 
 ```shell

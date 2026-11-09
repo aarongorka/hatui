@@ -13,10 +13,10 @@ url = os.environ["HATUI_WS_URL"]
 token = os.environ["HATUI_TOKEN"]
 
 
-def get_dashboard():
+def get_dashboard(insecure: bool = False):
     """To be used with `textual run --dev main:run`"""
 
-    dashboard = HomeAssistantDashboard(url, token)
+    dashboard = HomeAssistantDashboard(url, token, insecure=insecure)
     return dashboard
 
 
@@ -35,6 +35,13 @@ def run(
     debug: Annotated[
         bool, typer.Option(help="Enable debug logging", envvar="HATUI_DEBUG")
     ] = False,
+    insecure: Annotated[
+        bool,
+        typer.Option(
+            help="Skip TLS certificate verification (e.g. self-signed certs, corporate MITM proxies)",
+            envvar="HATUI_INSECURE",
+        ),
+    ] = False,
 ):
     """CLI entrypoint."""
 
@@ -49,7 +56,7 @@ def run(
         root = logging.getLogger()
         root.setLevel(logging.DEBUG)
 
-    dashboard = get_dashboard()
+    dashboard = get_dashboard(insecure)
     _ = dashboard.run()
 
 

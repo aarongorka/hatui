@@ -45,6 +45,9 @@ class EntityWidget(Horizontal):
         self.device_class: DeviceClass | None = None
         self.state_class: StateClass | None = None
         self.unit_of_measurement: UnitOfMeasurement | None = None
+        self.icon_widget = Static(id="icon", classes="icon")
+        self.name_widget = Static(id="name", classes="name")
+        self.state_widget = Static(id="state", classes="state")
         super().__init__(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
 
     @final
@@ -65,9 +68,9 @@ class EntityWidget(Horizontal):
     @override
     def compose(self) -> ComposeResult:
         with Horizontal(id="entity-horizontal", classes="entity-horizontal"):
-            yield Static(id="icon", classes="icon")
-            yield Static(id="name", classes="name")
-            yield Static(id="state", classes="state")
+            yield self.icon_widget
+            yield self.name_widget
+            yield self.state_widget
 
     # Magic Textual `watch_` functions that fire whenever their respective class attribute changes
     async def watch_entity(self, entity: Entity | None):
@@ -83,10 +86,10 @@ class EntityWidget(Horizontal):
                 self.entity_name = generate_entity_name(entity, device)
 
     async def watch_icon(self, icon: str) -> None:
-        self.query_one("#icon", Static).update(icon)
+        self.icon_widget.update(icon)
 
     async def watch_entity_name(self, entity_name: str) -> None:
-        self.query_one("#name", Static).update(entity_name)
+        self.name_widget.update(entity_name)
 
     async def watch_state_rendered(self, state_rendered: str) -> None:
-        self.query_one("#state", Static).update(state_rendered)
+        self.state_widget.update(state_rendered)

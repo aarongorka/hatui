@@ -1,27 +1,28 @@
 import asyncio
 import json
 import logging
-from typing import final, override
+import ssl
+from functools import cache
+from typing import Any, final, override
 
 import websockets
 from textual import work
 from textual.app import App, ComposeResult
-from textual.css.query import NoMatches
 from textual.reactive import Reactive, reactive
-from textual.widgets import Static
+from textual.containers import Vertical
+from textual.widgets import LoadingIndicator, Static
 from textual.worker import (
     get_current_worker,  # pyright: ignore[reportUnknownVariableType]
 )
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from hatui.hatui_types import (
-    Area,
     Areas,
     Config,
     Devices,
     Entities,
     EntitiesByGroup,
-    Entity,
     HomeAssistantWebsocketAuthRequiredResponse,
     HomeAssistantWebsocketAuthResponse,
     HomeAssistantWebsocketCommandResponse,
@@ -31,7 +32,6 @@ from hatui.hatui_types import (
     Icons,
     IconsResponse,
     RequestsExpectingResponseQueue,
-    State,
     States,
     SubscribeEntitiesEvent,
 )
@@ -49,6 +49,8 @@ from .helpers import (
     get_nf_icon_for_entity,
     get_state_classes,
     get_state_from_entity,
+    index_devices,
+    index_states,
     render_state,
     reverse_easing,
     sanitise_for_widget_id,
@@ -65,7 +67,14 @@ try:
     logger.info("Successfully imported pydantic.")
 except Exception:
     logger.info("Could not import pydantic, running without it...")
-    TypeAdapter = None
+    TypeAdapter = None  # ty: ignore[invalid-assignment] # hint to the rest of the code that pydantic isn't loaded
+
+
+@cache
+def get_adapter(response_type: Any) -> Any:
+    """Building a TypeAdapter is expensive, so only do it once per type."""
+
+    return TypeAdapter(response_type)  # pyright: ignore[reportOptionalCall]
 
 
 @final
@@ -74,20 +83,24 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
     CSS_PATH = "tcss.tcss"
 
-    entities: Reactive[Entities] = reactive([], recompose=True)
-    icons: Reactive[Icons] = reactive({}, recompose=True)
-    areas: Reactive[Areas] = reactive([], recompose=True)
-    devices: Reactive[Devices] = reactive([], recompose=True)
-    states: Reactive[States] = reactive([], recompose=True)
+    entities: Reactive[Entities] = reactive([])
+    icons: Reactive[Icons] = reactive({})
+    areas: Reactive[Areas] = reactive([])
+    devices: Reactive[Devices] = reactive([])
+    states: Reactive[States] = reactive([])
     entities_by_group: Reactive[EntitiesByGroup] = reactive({}, recompose=True)
-    config: Reactive[Config | None] = reactive(None, recompose=True)
+    config: Reactive[Config | None] = reactive(None)
 
-    def __init__(self, url: str, token: str, *args, **kwargs):
+    def __init__(self, url: str, token: str, *args, insecure: bool = False, **kwargs):
         self.command_id: int = 1
         self.url = url
         self.token = token
-        self.requests_expecting_response_queue: RequestsExpectingResponseQueue = []
+        self.insecure = insecure
+        self.requests_expecting_response_queue: RequestsExpectingResponseQueue = {}
         self.authed = False
+        self.entity_widgets: dict[str, EntityWidget] = {}
+        self.reconnect_initial_delay = 1.0
+        self.reconnect_max_delay = 30.0
         self.websocket: ClientConnection | None = None
         super().__init__(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
 
@@ -96,10 +109,27 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         self.command_id = command_id + 1
         return command_id
 
+    def get_ssl_context(self) -> ssl.SSLContext | None:
+        if not self.insecure or not self.url.startswith("wss://"):
+            return None
+        logger.warning("TLS certificate verification is disabled!")
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        return context
+
     async def get_websocket(self) -> ClientConnection:
         if self.websocket:
             return self.websocket
-        websocket = await websockets.connect(self.url)
+        # No frame size limit: HA registries/states easily exceed websockets' 1 MiB default.
+        # websockets also rejects an explicit `ssl=None` for wss:// URIs, so only pass it when set
+        ssl_context = self.get_ssl_context()
+        if ssl_context:
+            websocket = await websockets.connect(
+                self.url, ssl=ssl_context, max_size=None
+            )
+        else:
+            websocket = await websockets.connect(self.url, max_size=None)
         self.websocket = websocket
         return websocket
 
@@ -108,10 +138,9 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
         r = await websocket.recv()
         if TypeAdapter:
-            auth_required_adapter = TypeAdapter(
+            data = get_adapter(
                 HomeAssistantWebsocketAuthRequiredResponse
-            )
-            data = auth_required_adapter.validate_python(json.loads(r), strict=True)
+            ).validate_python(json.loads(r), strict=True)
         else:
             data = json.loads(r)  # pyright: ignore[reportAny]
 
@@ -122,12 +151,13 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         await websocket.send(json.dumps(auth))
         r = await websocket.recv()
         if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketAuthResponse)
-            data = adapter.validate_python(json.loads(r), strict=True)
+            data = get_adapter(HomeAssistantWebsocketAuthResponse).validate_python(
+                json.loads(r), strict=True
+            )
         else:
             data = json.loads(r)  # pyright: ignore[reportAny]
         if not data.get("type") == "auth_ok":
-            logger.error("Auth failed", r)
+            logger.error("Auth failed: %s", r)
             raise Exception("Auth failed")
 
         # TODO: ...maybe
@@ -149,169 +179,116 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         if not id:
             raise Exception("No ID in response?", response)
 
-        matching_requests = [
-            x for x in self.requests_expecting_response_queue if x["id"] == id
-        ]
-        if len(matching_requests) > 1:
-            raise Exception("Too many matching requests?", matching_requests)
-        elif len(matching_requests) == 0:
-            return None
+        callback = self.requests_expecting_response_queue.get(id)
+        if not callback:
+            return
 
-        matching_request = matching_requests[0]
-
-        callback = matching_request["callback"]
+        # subscriptions keep receiving events under the same id; everything else is one-shot
+        if callback != self.handle_entities_update:
+            del self.requests_expecting_response_queue[id]
 
         await callback(response)
 
-        # TODO: logic to clear from queue?
-        # self.requests_expecting_response_queue = [
-        #     x for x in self.requests_expecting_response_queue if x["id"] != id
-        # ]
+    async def fetch(self, requests: list[tuple[dict[str, Any], Any]]) -> list[Any]:
+        """Send all commands up front and collect their (validated) results, in request order."""
+
+        websocket = await self.get_websocket()
+        ids: list[int] = []
+        for command, _ in requests:
+            command_id = self.get_and_increment_command_id()
+            ids.append(command_id)
+            await websocket.send(json.dumps({"id": command_id, **command}))
+
+        raw_by_id: dict[int, Any] = {}
+        while len(raw_by_id) < len(ids):
+            data = json.loads(await websocket.recv())  # pyright: ignore[reportAny]
+            if data.get("id") in ids:  # pyright: ignore[reportAny]
+                raw_by_id[data["id"]] = data  # pyright: ignore[reportAny]
+
+        results: list[Any] = []
+        for command_id, (_, response_type) in zip(ids, requests):
+            data = raw_by_id[command_id]  # pyright: ignore[reportAny]
+            if TypeAdapter:
+                data = get_adapter(response_type).validate_python(data, strict=True)
+            check_response(data)  # pyright: ignore[reportAny]
+            results.append(data["result"])  # pyright: ignore[reportAny]
+        return results
 
     async def get_all_icons(self, config: Config) -> Icons:
         """Get icons for domains and all given integrations."""
 
-        try:
-            if self.icons:
-                return self.icons
-        except AttributeError:
-            pass
+        if self.icons:
+            return self.icons
 
-        components = config["components"]
         queries: IconQueries = [
             {"category": "entity_component"},
             *[
                 {"category": "entity", "integration": x}
-                for x in get_integrations_from_components(components)
+                for x in get_integrations_from_components(config["components"])
             ],
         ]
-        icons = await self.get_icons(queries)
-        # self.icons = icons
-        return icons
+        return await self.get_icons(queries)
 
     async def get_icons(self, queries: IconQueries) -> Icons:
         """Get icons for a given query."""
 
-        websocket = await self.get_websocket()
-        icons: Icons = {}
-
-        for query in queries:
-            command = {
-                "id": self.get_and_increment_command_id(),
-                "type": "frontend/get_icons",
-                "category": query["category"],
-                "integration": query.get("integration"),
-            }
-            await websocket.send(json.dumps(command))
-            r = await websocket.recv()
-            if TypeAdapter:
-                adapter = TypeAdapter(
-                    HomeAssistantWebsocketCommandResponse[IconsResponse]
+        responses: list[IconsResponse] = await self.fetch(
+            [
+                (
+                    {
+                        "type": "frontend/get_icons",
+                        "category": query["category"],
+                        "integration": query.get("integration"),
+                    },
+                    HomeAssistantWebsocketCommandResponse[IconsResponse],
                 )
-                data = adapter.validate_python(json.loads(r), strict=True)
-            else:
-                data = json.loads(r)  # pyright: ignore[reportAny]
-            check_response(data)
-            result = data["result"]
-            result_icons = result["resources"]
-            icons = {**icons, **result_icons}
-
+                for query in queries
+            ]
+        )
+        icons: Icons = {}
+        for response in responses:
+            icons.update(response["resources"])
         return icons
 
-    async def get_config(self) -> Config:
-        """Get 'config', namely all the integrations loaded in HA."""
+    async def load_registries(self) -> None:
+        """Fetch entities, areas, devices, states and config concurrently."""
 
-        websocket = await self.get_websocket()
-
-        command = {
-            "id": self.get_and_increment_command_id(),
-            "type": "get_config",
-        }
-        await websocket.send(json.dumps(command))
-        r = await websocket.recv()
-        if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Config])
-            data = adapter.validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        check_response(data)
-        config = data["result"]
-        # self.config = config
-        return config
-
-    async def get_entities(self) -> list[Entity]:
-        try:
-            if self.entities:
-                return self.entities
-        except AttributeError:
-            pass
-        websocket = await self.get_websocket()
-
-        command = {
-            "id": self.get_and_increment_command_id(),
-            "type": "config/entity_registry/list",
-        }
-        await websocket.send(json.dumps(command))
-        r = await websocket.recv()
-        if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Entities])
-            data = adapter.validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        check_response(data)
-        entities: list[Entity] = data.get("result", [])
-        filtered_entities = filter_entities(entities)
-        logger.debug("Entities: %s", filtered_entities)
-        return filtered_entities
-
-    async def get_states(self) -> list[State]:
-        try:
-            if self.states:
-                return self.states
-        except AttributeError:
-            pass
-        websocket = await self.get_websocket()
-
-        command = {
-            "id": self.get_and_increment_command_id(),
-            "type": "get_states",
-        }
-        await websocket.send(json.dumps(command))
-        r = await websocket.recv()
-        if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[States])
-            data = adapter.validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        check_response(data)
-        states = data.get("result")
-        logger.debug("States: %s", states)
-        # self.states = states
-        return states
-
-    async def get_devices(self) -> Devices:
-        try:
-            if self.devices:
-                return self.devices
-        except AttributeError:
-            pass
-        websocket = await self.get_websocket()
-
-        command = {
-            "id": self.get_and_increment_command_id(),
-            "type": "config/device_registry/list",
-        }
-        await websocket.send(json.dumps(command))
-        r = await websocket.recv()
-        if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Devices])
-            data = adapter.validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        check_response(data)
-        devices = data["result"]
-        # self.devices = devices
-        return devices
+        entities, areas, devices, states, config = await self.fetch(
+            [
+                (
+                    {"type": "config/entity_registry/list"},
+                    HomeAssistantWebsocketCommandResponse[Entities],
+                ),
+                (
+                    {"type": "config/area_registry/list"},
+                    HomeAssistantWebsocketCommandResponse[Areas],
+                ),
+                (
+                    {"type": "config/device_registry/list"},
+                    HomeAssistantWebsocketCommandResponse[Devices],
+                ),
+                (
+                    {"type": "get_states"},
+                    HomeAssistantWebsocketCommandResponse[States],
+                ),
+                (
+                    {"type": "get_config"},
+                    HomeAssistantWebsocketCommandResponse[Config],
+                ),
+            ]
+        )
+        self.entities = filter_entities(entities)
+        self.areas = areas
+        self.devices = devices
+        self.states = states
+        self.config = config
+        logger.info(
+            "Startup sequence got %d entities, %d areas, %d devices, %d states.",
+            len(self.entities),
+            len(areas),
+            len(devices),
+            len(states),
+        )
 
     async def send_subscribe_entities(self, entity_ids: list[str]) -> None:
         websocket = await self.get_websocket()
@@ -323,9 +300,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             "include": {"entities": entity_ids},
         }
         await websocket.send(json.dumps(command))
-        self.requests_expecting_response_queue.append(
-            {"id": request_id, "callback": self.handle_entities_update}
-        )
+        self.requests_expecting_response_queue[request_id] = self.handle_entities_update
         logger.info("Subscribed to updates for %d entities.", len(entity_ids))
 
     async def handle_entities_update(
@@ -336,30 +311,6 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             return None
         else:
             return await self.update_dashboard_with_entity_updates(response["event"])
-
-    async def get_areas(self) -> list[Area]:
-        try:
-            if self.areas:
-                return self.areas
-        except AttributeError:
-            pass
-        websocket = await self.get_websocket()
-
-        command = {
-            "id": self.get_and_increment_command_id(),
-            "type": "config/area_registry/list",
-        }
-        await websocket.send(json.dumps(command))
-        r = await websocket.recv()
-        if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketCommandResponse[Areas])
-            data = adapter.validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        check_response(data)
-        areas = data["result"]
-        # self.areas = areas
-        return areas
 
     async def handle_toggle_light[T](
         self, response: HomeAssistantWebsocketResponse[T]
@@ -389,9 +340,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             },
         }
         await websocket.send(json.dumps(command))
-        self.requests_expecting_response_queue.append(
-            {"id": request_id, "callback": self.handle_toggle_light}
-        )
+        self.requests_expecting_response_queue[request_id] = self.handle_toggle_light
 
     async def handle_toggle_switch[T](
         self, response: HomeAssistantWebsocketResponse[T]
@@ -422,9 +371,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             },
         }
         await websocket.send(json.dumps(command))
-        self.requests_expecting_response_queue.append(
-            {"id": request_id, "callback": self.handle_toggle_switch}
-        )
+        self.requests_expecting_response_queue[request_id] = self.handle_toggle_switch
 
     async def handle_button_press[T](
         self, response: HomeAssistantWebsocketResponse[T]
@@ -454,27 +401,10 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             },
         }
         await websocket.send(json.dumps(command))
-        self.requests_expecting_response_queue.append(
-            {"id": request_id, "callback": self.handle_button_press}
-        )
+        self.requests_expecting_response_queue[request_id] = self.handle_button_press
 
     async def get_entities_by_group(self) -> EntitiesByGroup:
-        # TODO: run each of these concurrently
-        # entities = self.get_entities(websocket)
-        # areas = self.get_areas(websocket)
-        # devices = self.get_devices(websocket)
-
-        # entities_by_group = split_entities_by_group(
-        #     *await asyncio.gather(areas, devices, entities)
-        # )
-        # return entities_by_group
-
-        areas = await self.get_areas()
-        devices = await self.get_devices()
-        entities = await self.get_entities()
-        entities_by_group = split_entities_by_group(areas, devices, entities)
-        # self.entities_by_group = entities_by_group
-        return entities_by_group
+        return split_entities_by_group(self.areas, self.devices, self.entities)
 
     async def update_dashboard_with_entity_updates(self, event: SubscribeEntitiesEvent):
         entity_additions = event.get("a", {})
@@ -486,20 +416,21 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 len(entity_changes),
             )
         entity_updates = entity_changes or entity_additions
+        # additions are the initial full dump; animating all of them is expensive and meaningless
+        animate = bool(entity_changes)
         with (
             self.batch_update()
         ):  # TODO: add option to use `with nullcontext()` for debugging
             logger.debug("Pausing paints while we update all entities...")
             for entity_id, details in entity_updates.items():
                 wid = f"#{sanitise_for_widget_id(entity_id)}"
-                try:
-                    entity_widget = self.query_one(wid, EntityWidget)
-                    state_widget = entity_widget.query_one("#state", Static)
-                except NoMatches:
+                entity_widget = self.entity_widgets.get(entity_id)
+                if not entity_widget or not entity_widget.is_mounted:
                     logger.warning(
                         "Couldn't find node %s, may not be initialised yet...", wid
                     )
                     continue
+                state_widget = entity_widget.state_widget
                 state_raw = details.get("s")
                 if not state_raw:
                     logger.info(
@@ -521,8 +452,11 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     state_rendered, state_raw, old_state_rendered, old_state_raw
                 )
 
-                if state_rendered != entity_widget.state_rendered:
-                    logger.debug('Updating entity "%s" with state "%s"', wid)
+                state_changed = state_rendered != entity_widget.state_rendered
+                if state_changed:
+                    logger.debug(
+                        'Updating entity "%s" with state "%s"', wid, state_rendered
+                    )
                     entity_widget.state_rendered = state_rendered
 
                 if state_classes != "state" and state_classes != state_widget.classes:
@@ -547,12 +481,18 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 icon_colour, icon_classes = get_icon_colour_and_classes(
                     state_rendered, details.get("a")
                 )
-                icon_widget = entity_widget.query_one("#icon", Static)
+                icon_widget = entity_widget.icon_widget
 
+                icon_changed = icon != entity_widget.icon
                 entity_widget.icon = icon
 
                 icon_widget.classes = icon_classes
                 icon_widget.styles.color = icon_colour
+
+                if not animate or not (
+                    state_changed or icon_changed or details.get("a")
+                ):
+                    continue
 
                 logger.debug("Animating entity: %s", wid)
                 entity_widget.styles.animate(
@@ -564,35 +504,68 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 )
             logger.debug("Updates finished, unpausing paints.")
 
-    async def wait_for_responses[T](self) -> HomeAssistantWebsocketResponse[T] | None:
+    async def wait_for_responses[T](self) -> HomeAssistantWebsocketResponse[T]:
         websocket = await self.get_websocket()
-
-        try:
-            r = await websocket.recv()
-        except TimeoutError:
-            logger.info("Timed out waiting for responses, returning None...")
-            return None
+        r = await websocket.recv()
         if TypeAdapter:
-            adapter = TypeAdapter(HomeAssistantWebsocketResponse[T])
-            data = adapter.validate_python(json.loads(r), strict=True)
+            data = get_adapter(HomeAssistantWebsocketResponse).validate_python(
+                json.loads(r), strict=True
+            )
         else:
             data = json.loads(r)  # pyright: ignore[reportAny]
         logger.debug("Raw response from HA: %s", r)
         return data
 
+    async def connect(self) -> None:
+        self.websocket = None
+        _ = await self.get_websocket()
+        await self.auth(self.token)
+
+    async def subscribe_to_all_entities(self) -> None:
+        await self.send_subscribe_entities(
+            entity_ids=[x["entity_id"] for x in self.entities]
+        )
+
+    async def reconnect(self) -> None:
+        """Re-establish the connection and subscription, retrying with exponential backoff."""
+
+        delay = self.reconnect_initial_delay
+        while True:
+            try:
+                if self.websocket:
+                    await self.websocket.close()
+                self.requests_expecting_response_queue.clear()
+                await self.connect()
+                await self.subscribe_to_all_entities()
+                return
+            except (OSError, WebSocketException) as e:
+                logger.warning("Reconnect failed (%s), retrying in %.1fs...", e, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self.reconnect_max_delay)
+
     @work(exclusive=True)
     async def receive_responses_and_handle(self):
+        # give the initial recompose time to mount widgets before the first batch of states arrives
         await asyncio.sleep(5)
         worker = get_current_worker()  # pyright: ignore[reportUnknownVariableType]
-        websocket = self.websocket
-        if not websocket:
-            raise Exception("Could not get websocket.")
-        while worker:
-            logger.info("Checking for responses...")
-            while response := await self.wait_for_responses():
-                await self.handle_response(response)
-            logger.info("Finished checking for updates.")
-            await asyncio.sleep(60)
+        while not worker.is_cancelled:
+            try:
+                while True:
+                    await self.handle_response(await self.wait_for_responses())
+            except ConnectionClosed:
+                logger.warning("Connection to Home Assistant lost, reconnecting...")
+                self.notify(
+                    "Connection lost, reconnecting...",
+                    title=" Home Assistant",
+                    severity="warning",
+                )
+                await self.reconnect()
+                logger.info("Reconnected.")
+                self.notify("Reconnected.", title="󰄬 Home Assistant")
+
+    async def on_unmount(self) -> None:
+        if self.websocket:
+            await self.websocket.close()
 
     @override
     def compose(self) -> ComposeResult:
@@ -603,7 +576,19 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         if not groups:
             # because this is a sync function, we cannot `await self.get_entities_by_group()`
             # therefore we allow Textual to compose this immediately, then run routines to load data in `self.on_mount()`
+            with Vertical(id="loading"):
+                yield Static("󰟐 hatui", id="loading-title")
+                yield LoadingIndicator()
+                yield Static("Connecting…", id="loading-status")
             return
+
+        devices = self.devices
+        states = self.states
+        icons = self.icons
+        devices_by_id = index_devices(devices) if devices else {}
+        states_by_entity_id = index_states(states) if states else {}
+
+        self.entity_widgets = {}
 
         for group in groups:
             # with Vertical(id=f"group-{sanitise(group)}", classes="group"): # TODO: if Textual ever gets reactive layouts...
@@ -616,16 +601,14 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     id=sanitise_for_widget_id(entity["entity_id"]),
                 )
                 entity_widget.entity = entity
-                devices = self.devices
-                states = self.states
                 if devices:
-                    device = get_device_from_entity(entity, devices)
+                    device = get_device_from_entity(entity, devices_by_id)
                     # set everything we can on first "paint" to avoid having to wait for a refresh
                     entity_widget.device = device
                     entity_widget.entity_name = generate_entity_name(entity, device)
-                    entity_widget.area_name = get_area_of_entity(entity, devices)
+                    entity_widget.area_name = get_area_of_entity(entity, devices_by_id)
                 if devices and states:
-                    state = get_state_from_entity(entity, states)
+                    state = get_state_from_entity(entity, states_by_entity_id)
                     entity_widget.state = state
                     entity_widget.state_raw = state["state"]
                     entity_widget.device_class = state["attributes"].get("device_class")
@@ -633,9 +616,9 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                     entity_widget.unit_of_measurement = state["attributes"].get(
                         "unit_of_measurement"
                     )
-                icons = self.icons
                 if icons:
                     entity_widget.icon = get_nf_icon_for_entity(icons, entity)
+                self.entity_widgets[entity["entity_id"]] = entity_widget
                 yield entity_widget
 
     # TODO: should we technically have this?
@@ -665,57 +648,45 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
             if entity_widget.entity:
                 entity_widget.icon = get_nf_icon_for_entity(icons, entity_widget.entity)
 
+    def set_loading_status(self, text: str) -> None:
+        for status in self.query("#loading-status").results(Static):
+            status.update(text)
+
     async def on_mount(self):
+        self.screen.add_class("booting")
+        # let the loading screen paint before any blocking network or parsing work
+        self.call_after_refresh(self.start_up)
+
+    async def start_up(self):
         if not self.websocket:
+            self.set_loading_status("Connecting…")
             _ = await self.get_websocket()
             await self.auth(self.token)
 
-        # TODO: is there a better way to have this data "lazy load"?
         if not self.entities:
-            entities = await self.get_entities()
-            logger.info("Startup sequence got %d entities.", len(entities))
-            self.entities = entities
+            self.set_loading_status("Loading entities, devices and states…")
+            await self.load_registries()
 
-        if not self.areas:
-            areas = await self.get_areas()
-            logger.info("Startup sequence got %d areas.", len(areas))
-            self.areas = areas
-
-        if not self.devices:
-            devices = await self.get_devices()
-            logger.info("Startup sequence got %d devices.", len(devices))
-            self.devices = devices
-
-        if not self.states:
-            states = await self.get_states()
-            logger.info("Startup sequence got %d states.", len(states))
-            self.states = states
-
-        if not self.config:
-            config = await self.get_config()
-            logger.info(
-                "Startup sequence got config with %d integrations.",
-                len(config["components"]),
-            )
-
-            if not self.icons:
-                icons = await self.get_all_icons(config)
-                logger.info("Startup sequence got %d icons.", len(icons))
-                self.icons = icons
+        config = self.config
+        if config and not self.icons:
+            self.set_loading_status("Loading icons…")
+            self.icons = await self.get_all_icons(config)
+            logger.info("Startup sequence got %d icons.", len(self.icons))
 
         if not self.entities_by_group:
+            self.set_loading_status("Building dashboard…")
+            await asyncio.sleep(0)
             entities_by_group = await self.get_entities_by_group()
             logger.info(
                 "Startup sequence got %d entities_by_group.", len(entities_by_group)
             )
             self.entities_by_group = entities_by_group
+        self.screen.remove_class("booting")
 
         if not self.entities:
             raise Exception("No entities yet...")
 
-        _ = await self.send_subscribe_entities(
-            entity_ids=[x["entity_id"] for x in self.entities]
-        )
+        await self.subscribe_to_all_entities()
         _ = self.receive_responses_and_handle()
 
     async def on_entity_widget_clicked(self, message: EntityWidget.Clicked) -> None:

@@ -1,15 +1,18 @@
 import datetime
 import logging
+from functools import cache
 
 import humanize
 import nerdfont  # pyright: ignore[reportMissingTypeStubs]
 from textual.color import Color
 
 from .hatui_types import (
+    Area,
     Areas,
     Device,
     DeviceClass,
     Devices,
+    DevicesById,
     Entities,
     EntitiesByGroup,
     Entity,
@@ -20,6 +23,7 @@ from .hatui_types import (
     StateAttributes,
     StateClass,
     States,
+    StatesByEntityId,
     SubscribeEntitiesEventEntityDetails,
     UnitOfMeasurement,
 )
@@ -82,6 +86,7 @@ def get_icon_for_state(
     return default_icon
 
 
+@cache
 def mdi_to_nerd_font_name(mdi_name: str) -> str | None:
     """Attempt to translate from MDI's `mdi:some-thing` to nerdfont's `nf-md-some_thing`."""
 
@@ -286,11 +291,7 @@ def filter_entities(entities: Entities) -> Entities:
     return filtered
 
 
-def get_device_name_from_device_id(device_id: str, devices: Devices) -> str:
-    device = next((x for x in devices if x.get("id") == device_id), None)
-    if not device:
-        logger.error("Could not find device for device_id %s", device_id)
-        raise Exception("Missing device")
+def get_device_name(device: Device) -> str:
     device_name = device["name"]
     if not device_name:
         logger.error("Device has no name: %s", device)
@@ -298,35 +299,22 @@ def get_device_name_from_device_id(device_id: str, devices: Devices) -> str:
     return device_name
 
 
-def get_area_name_by_area_id(area_id: str, areas: Areas) -> str:
-    area = next((x for x in areas if x.get("area_id") == area_id), None)
-    if not area:
-        raise Exception("Could not find area?")
+def get_area_name(area: Area) -> str:
     area_name = area.get("name")
     if not area_name:
         raise Exception("Area does not have name?")
     return area_name
 
 
-def get_entities_for_domain(domain: str, entities: Entities) -> Entities:
-    return [x for x in entities if x.get("entity_id").startswith(f"{domain}.")]
+def index_devices(devices: Devices) -> DevicesById:
+    return {x["id"]: x for x in devices}
 
 
-def get_entities_in_area(
-    area_id: str, entities: Entities, devices: Devices
-) -> Entities:
-    result: Entities = []
-    for entity in entities:
-        entity_id = entity.get("entity_id")
-        if not entity_id:
-            continue
-        entity_area_id = get_area_of_entity(entity, devices)
-        if entity_area_id == area_id:
-            result.append(entity)
-    return result
+def index_states(states: States) -> StatesByEntityId:
+    return {x["entity_id"]: x for x in states}
 
 
-def get_area_of_entity(entity: Entity, devices: Devices) -> str | None:
+def get_area_of_entity(entity: Entity, devices_by_id: DevicesById) -> str | None:
     """Get area of entity either from the entity itself, or the device it belongs to."""
 
     if entity.get("area_id"):
@@ -335,72 +323,45 @@ def get_area_of_entity(entity: Entity, devices: Devices) -> str | None:
     device_id = entity.get("device_id")
     if not device_id:
         return None
-    device = next((x for x in devices if x.get("id") == device_id), None)
+    device = devices_by_id.get(device_id)
     if not device:
         return None
     return device.get("area_id")
 
 
-def get_entities_for_device(device_id: str, entities: Entities) -> Entities:
-    result: Entities = []
-    for entity in entities:
-        if entity.get("device_id") == device_id:
-            result.append(entity)
-    return result
-
-
 def split_entities_by_group(
     areas: Areas, devices: Devices, entities: Entities
 ) -> EntitiesByGroup:
-    """Group entities by area, then device, then domain."""
+    """Group entities by area, then device, then domain, in a single pass over entities."""
 
-    area_ids: list[str] = [
-        x for x in [x.get("area_id") for x in areas] if x is not None
-    ]
-    areas_with_entities: EntitiesByGroup = {
-        k: get_entities_in_area(k, entities, devices) for k in area_ids
+    areas_by_id = {
+        area_id: x for x in areas if (area_id := x.get("area_id")) is not None
     }
+    devices_by_id = index_devices(devices)
+    area_buckets: EntitiesByGroup = {k: [] for k in areas_by_id}
+    device_buckets: EntitiesByGroup = {k: [] for k in devices_by_id}
+    domain_buckets: EntitiesByGroup = {}
+
+    for entity in entities:
+        area_id = get_area_of_entity(entity, devices_by_id)
+        if entity.get("entity_id") and area_id in area_buckets:
+            area_buckets[area_id].append(entity)
+            continue
+        device_id = entity.get("device_id")
+        if device_id in device_buckets:
+            device_buckets[device_id].append(entity)
+            continue
+        domain = get_domain_from_entity_id(entity["entity_id"])
+        domain_buckets.setdefault(domain, []).append(entity)
+
     area_names_with_entities: EntitiesByGroup = {
-        get_area_name_by_area_id(k, areas): v for k, v in areas_with_entities.items()
-    }
-
-    entity_ids_with_area = [
-        x
-        for x in [
-            entity.get("entity_id")
-            for group in areas_with_entities
-            for entity in areas_with_entities[group]
-        ]
-    ]
-    entities_without_area = [
-        x for x in entities if x.get("entity_id") not in entity_ids_with_area
-    ]
-    device_ids = [x.get("id") for x in devices]
-    devices_with_entities: EntitiesByGroup = {
-        k: get_entities_for_device(k, entities_without_area) for k in device_ids
+        get_area_name(areas_by_id[k]): v for k, v in area_buckets.items()
     }
     device_names_with_entities: EntitiesByGroup = {
-        get_device_name_from_device_id(k, devices): v
-        for k, v in devices_with_entities.items()
+        get_device_name(devices_by_id[k]): v for k, v in device_buckets.items()
     }
-
-    entity_ids_with_device = [
-        entity.get("entity_id")
-        for group in devices_with_entities
-        for entity in devices_with_entities[group]
-    ]
-    other_entity_ids = [
-        x.get("entity_id")
-        for x in entities_without_area
-        if x.get("entity_id") not in entity_ids_with_device
-    ]
-    domains = set(get_domain_from_entity_id(x) for x in other_entity_ids)
-    other_entities: Entities = [
-        x for x in entities if x.get("entity_id") in other_entity_ids
-    ]
-    domains_with_entities = {
-        k.replace("_", " ").title(): get_entities_for_domain(k, other_entities)
-        for k in domains
+    domains_with_entities: EntitiesByGroup = {
+        k.replace("_", " ").title(): v for k, v in domain_buckets.items()
     }  # TODO: use translation for domain name
 
     return {
@@ -525,13 +486,15 @@ def convert_subscribed_event_entity_to_state(
     return state
 
 
-def get_device_from_entity(entity: Entity, devices: Devices) -> Device | None:
-    device = next((d for d in devices if d.get("id") == entity.get("device_id")), None)
-    return device
+def get_device_from_entity(entity: Entity, devices_by_id: DevicesById) -> Device | None:
+    device_id = entity.get("device_id")
+    return devices_by_id.get(device_id) if device_id else None
 
 
-def get_state_from_entity(entity: Entity, states: States) -> State:
-    state = next((x for x in states if x.get("entity_id") == entity["entity_id"]))
+def get_state_from_entity(
+    entity: Entity, states_by_entity_id: StatesByEntityId
+) -> State:
+    state = states_by_entity_id.get(entity["entity_id"])
     if not state:
         raise Exception("Could not get state?", entity)
     return state

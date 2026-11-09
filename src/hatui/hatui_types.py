@@ -54,12 +54,7 @@ type HomeAssistantWebsocketResponse[T] = (
 )
 
 
-class RequestExpectingResponseQueue(TypedDict):
-    id: int
-    callback: Callable[..., Any]
-
-
-type RequestsExpectingResponseQueue = list[RequestExpectingResponseQueue]
+type RequestsExpectingResponseQueue = dict[int, Callable[..., Any]]
 
 
 class ConfigUnitSystem(TypedDict):
@@ -124,6 +119,7 @@ class Device(TypedDict):
 
 
 type Devices = list[Device]
+type DevicesById = dict[str, Device]
 
 type StateClass = str | None
 type DeviceClass = str | None
@@ -163,6 +159,7 @@ class State(TypedDict):
 
 
 type States = list[State]
+type StatesByEntityId = dict[str, State]
 
 
 class Entity(TypedDict):
@@ -175,7 +172,7 @@ class Entity(TypedDict):
     disabled_by: str | None
     entity_category: str | None
     entity_id: str
-    has_entity_name: bool | None
+    has_entity_name: NotRequired[bool | None]
     hidden_by: str | None
     icon: str | None
     id: str
