@@ -1,22 +1,30 @@
-from collections.abc import Mapping
-from typing import Any
+from typing import cast
 
-type StateDict = dict[str, Any]
+from .hatui_types import (
+    State,
+    StateAttributes,
+    SubscribeEntitiesEvent,
+    SubscribeEntitiesEventEntityDetails,
+)
 
 
-def state_from_event(entity_id: str, details: Mapping[str, Any]) -> StateDict:
+def state_from_event(
+    entity_id: str, details: SubscribeEntitiesEventEntityDetails
+) -> State:
+    attributes: StateAttributes = details["a"].copy() if "a" in details else {}
     return {
         "entity_id": entity_id,
         "state": details.get("s"),
-        "attributes": dict(details.get("a", {})),
+        "attributes": attributes,
         "last_changed": details.get("lc"),
+        "last_reported": None,
         "last_updated": details.get("lu"),
         "context": details.get("c"),
     }
 
 
 def apply_event(
-    store: dict[str, StateDict], event: Mapping[str, Any]
+    store: dict[str, State], event: SubscribeEntitiesEvent
 ) -> tuple[set[str], set[str]]:
     """Merge a `subscribe_entities` event in to the store.
 
@@ -34,21 +42,22 @@ def apply_event(
         current = store.get(entity_id)
         if current is None:
             continue
-        plus: Mapping[str, Any] = diff.get("+", {})
-        minus: Mapping[str, Any] = diff.get("-", {})
+        plus = diff.get("+", {})
+        minus = diff.get("-", {})
         if "s" in plus:
             current["state"] = plus["s"]
-        attributes: dict[str, Any] = current.setdefault("attributes", {})
+        attributes = current["attributes"]
         attributes.update(plus.get("a", {}))
+        # attribute names are only known at runtime, which a TypedDict cannot express
+        loose = cast("dict[str, object]", cast("object", attributes))
         for key in minus.get("a", []):
-            _ = attributes.pop(key, None)
-        for short, long in (
-            ("lc", "last_changed"),
-            ("lu", "last_updated"),
-            ("c", "context"),
-        ):
-            if short in plus:
-                current[long] = plus[short]
+            _ = loose.pop(key, None)
+        if "lc" in plus:
+            current["last_changed"] = plus["lc"]
+        if "lu" in plus:
+            current["last_updated"] = plus["lu"]
+        if "c" in plus:
+            current["context"] = plus["c"]
         changed.add(entity_id)
 
     for entity_id in event.get("r", []):

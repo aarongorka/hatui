@@ -2,7 +2,9 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
+
+from .hatui_types import HistoryEntry, StateAttributes
 
 NUMERIC_SENSOR_DEVICE_CLASSES = frozenset(
     {
@@ -39,10 +41,10 @@ type Segment = tuple[float, float, str]
 class Sample:
     t: float
     state: str
-    attributes: Mapping[str, Any]
+    attributes: StateAttributes
 
 
-def is_numeric_entity(domain: str, attributes: Mapping[str, Any]) -> bool:
+def is_numeric_entity(domain: str, attributes: StateAttributes) -> bool:
     return (
         domain in NUMERICAL_DOMAINS
         or "unit_of_measurement" in attributes
@@ -54,26 +56,27 @@ def is_numeric_entity(domain: str, attributes: Mapping[str, Any]) -> bool:
     )
 
 
-def history_kind(domain: str, attributes: Mapping[str, Any]) -> Kind:
+def history_kind(domain: str, attributes: StateAttributes) -> Kind:
     if domain in LINE_ATTRIBUTES or domain == "zone":
         return "line"
     return "line" if is_numeric_entity(domain, attributes) else "timeline"
 
 
-def parse_history(entries: Sequence[Mapping[str, Any]]) -> list[Sample]:
+def parse_history(entries: Sequence[HistoryEntry]) -> list[Sample]:
     """Decode the compressed `history/history_during_period` form.
 
     Attributes are only sent when they change, so carry them forward.
     """
 
     samples: list[Sample] = []
-    attributes: Mapping[str, Any] = {}
+    attributes: StateAttributes = {}
     for entry in entries:
         attributes = entry.get("a") or attributes
         t = entry.get("lc") or entry.get("lu")
-        if t is None or "s" not in entry:
+        state = entry.get("s")
+        if t is None or state is None:
             continue
-        samples.append(Sample(float(t), str(entry["s"]), attributes))
+        samples.append(Sample(float(t), state, attributes))
     return samples
 
 
@@ -82,12 +85,14 @@ def numeric_points(
 ) -> list[Point]:
     points: list[Point] = []
     for sample in samples:
-        raw: Any = sample.attributes.get(attribute) if attribute else sample.state
-        if sample.state in UNAVAILABLE or raw is None:
+        # the attribute is chosen at runtime, so it cannot be a literal TypedDict key
+        attributes: Mapping[str, object] = sample.attributes
+        raw = attributes.get(attribute) if attribute else sample.state
+        if sample.state in UNAVAILABLE or not isinstance(raw, str | int | float):
             continue
         try:
             points.append((sample.t, float(raw)))
-        except (TypeError, ValueError):
+        except ValueError:
             continue
     return points
 

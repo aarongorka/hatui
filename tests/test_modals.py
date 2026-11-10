@@ -1,9 +1,12 @@
+import datetime
 from pathlib import Path
-from typing import Any
+from typing import ClassVar, override
 
 from textual.app import App, ComposeResult
+from textual.types import CSSPathType
 
 from hatui.chart import line_chart, timeline
+from hatui.hatui_types import Command, ServiceData, StateAttributes
 from hatui.history import (
     Sample,
     history_kind,
@@ -16,7 +19,8 @@ from hatui.media import duration_text, progress_fraction, supports
 from hatui.more_info import EntityModal, MoreInfo, logbook_lines, state_panel
 from hatui.services import Services
 from hatui.weather import condition_name, forecast_rows, forecast_type
-import datetime
+
+from .factories import make_state
 
 
 def test_history_kind_follows_lovelace() -> None:
@@ -38,7 +42,7 @@ def test_parse_history_carries_attributes_and_skips_unavailable() -> None:
         ]
     )
     assert [s.t for s in samples] == [10.0, 20.0, 30.0]
-    assert samples[2].attributes["unit_of_measurement"] == "W"
+    assert samples[2].attributes.get("unit_of_measurement") == "W"
     assert numeric_points(samples) == [(10.0, 1.5), (30.0, 3.0)]
 
 
@@ -83,7 +87,7 @@ def test_media_helpers() -> None:
 
 
 def test_light_and_weather_helpers() -> None:
-    attrs = {
+    attrs: StateAttributes = {
         "min_color_temp_kelvin": 2000,
         "max_color_temp_kelvin": 6000,
         "color_temp_kelvin": 4000,
@@ -109,33 +113,30 @@ def test_light_and_weather_helpers() -> None:
 
 
 class _ModalApp(App[None]):
-    CSS_PATH = Path(__file__).parent.parent / "src/hatui/tcss.tcss"
+    CSS_PATH: ClassVar[CSSPathType | None] = (
+        Path(__file__).parent.parent / "src/hatui/tcss.tcss"
+    )
 
-    def __init__(
-        self, calls: list[tuple[str, str, str, dict[str, Any] | None]]
-    ) -> None:
+    def __init__(self, calls: list[tuple[str, str, str, ServiceData | None]]) -> None:
         super().__init__()
-        self.calls = calls
+        self.calls: list[tuple[str, str, str, ServiceData | None]] = calls
 
-    async def request(self, command: dict[str, Any]) -> Any:
+    async def request[T](self, _command: Command, _result_type: type[T]) -> T:
         raise Exception("no history in tests")
 
     async def call(
-        self, domain: str, service: str, entity_id: str, data: dict[str, Any] | None
+        self, domain: str, service: str, entity_id: str, data: ServiceData | None
     ) -> None:
         self.calls.append((domain, service, entity_id, data))
 
+    @override
     def compose(self) -> ComposeResult:
         yield from ()
 
     def on_mount(self) -> None:
-        state = {
-            "state": "on",
-            "attributes": {
-                "brightness": 128,
-                "supported_color_modes": ["brightness"],
-            },
-        }
+        state = make_state(
+            "light.lamp", "on", brightness=128, supported_color_modes=["brightness"]
+        )
         info = MoreInfo(
             "Lamp", "x", None, "on", [("Entity ID", "light.lamp")], "Toggle"
         )
@@ -155,17 +156,19 @@ class _ModalApp(App[None]):
 
 
 async def test_light_brightness_bar_calls_service() -> None:
-    calls: list[tuple[str, str, str, dict[str, Any] | None]] = []
+    calls: list[tuple[str, str, str, ServiceData | None]] = []
     app = _ModalApp(calls)
     async with app.run_test(size=(120, 50)) as pilot:
         await pilot.pause()
-        await pilot.click("#light-brightness", offset=(1, 0))
+        _ = await pilot.click("#light-brightness", offset=(1, 0))
         await pilot.pause()
     assert calls
     domain, service, entity_id, data = calls[-1]
     assert (domain, service, entity_id) == ("light", "turn_on", "light.lamp")
     assert data is not None
-    assert data["brightness_pct"] < 20
+    brightness = data["brightness_pct"]
+    assert isinstance(brightness, int | float)
+    assert brightness < 20
 
 
 def test_state_panel_shows_state_and_ages() -> None:

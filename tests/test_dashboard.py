@@ -1,15 +1,42 @@
 import json
-from typing import Any, cast
+from pathlib import Path
+from typing import cast
 
-from hatui.dashboard import HomeAssistantDashboard
+import pytest
+from websockets.asyncio.client import ClientConnection
+from websockets.asyncio.server import ServerConnection
+
+from hatui.dashboard import HomeAssistantDashboard, parse
+from hatui.hatui_types import Command, DisplayEntityRaw, JsonObject, State
+from hatui.helpers import loads
+
+from .factories import make_state, server_port
+
+
+def _noop(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+def _attach(dashboard: HomeAssistantDashboard, websocket: "FakeWebsocket") -> None:
+    dashboard.websocket = cast("ClientConnection", cast("object", websocket))
+
+
+def _id(response: JsonObject) -> int:
+    id_ = response["id"]
+    assert isinstance(id_, int)
+    return id_
+
+
+async def _ignore(_response: JsonObject) -> None:
+    return None
 
 
 class FakeWebsocket:
     def __init__(self) -> None:
-        self.sent: list[dict[str, Any]] = []
+        self.sent: list[JsonObject] = []
 
     async def send(self, message: str) -> None:
-        self.sent.append(json.loads(message))
+        self.sent.append(loads(message))
 
     async def recv(self) -> str:
         # Replies arrive in reverse order to prove results are matched by id
@@ -26,42 +53,44 @@ class FakeWebsocket:
 
 async def test_fetch_sends_all_commands_before_reading() -> None:
     dashboard = HomeAssistantDashboard("ws://x", "token")
-    dashboard.websocket = cast(Any, FakeWebsocket())
+    _attach(dashboard, FakeWebsocket())
 
-    results = await dashboard.fetch(
-        [({"type": "a"}, dict), ({"type": "b"}, dict), ({"type": "c"}, dict)]
-    )
+    results = await dashboard.fetch_raw([{"type": "a"}, {"type": "b"}, {"type": "c"}])
 
     assert results == ["a", "b", "c"]
 
 
-async def test_handle_response_drops_one_shot_callbacks_only() -> None:
+async def test_handle_response_drops_one_shot_callbacks_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dashboard = HomeAssistantDashboard("ws://x", "token")
     calls: list[int] = []
 
-    async def one_shot(response: Any) -> None:
-        calls.append(response["id"])
+    async def one_shot(response: JsonObject) -> None:
+        calls.append(_id(response))
 
-    async def subscription(response: Any) -> None:
-        calls.append(response["id"])
+    async def subscription(response: JsonObject) -> None:
+        calls.append(_id(response))
 
-    dashboard.handle_entities_update = subscription  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(dashboard, "handle_entities_update", subscription)
     dashboard.requests_expecting_response_queue = {
         1: one_shot,
         2: dashboard.handle_entities_update,
     }
 
     for id_ in (1, 1, 2, 2):
-        await dashboard.handle_response({"id": id_, "type": "result"})  # pyright: ignore[reportArgumentType]
+        await dashboard.handle_response({"id": id_, "type": "result"})
 
     assert calls == [1, 2, 2]
     assert list(dashboard.requests_expecting_response_queue) == [2]
 
 
-async def test_reconnect_retries_then_resubscribes() -> None:
+async def test_reconnect_retries_then_resubscribes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dashboard = HomeAssistantDashboard("ws://x", "token")
     dashboard.reconnect_initial_delay = 0
-    dashboard.requests_expecting_response_queue = {7: cast(Any, None)}
+    dashboard.requests_expecting_response_queue = {7: _ignore}
     attempts: list[str] = []
 
     async def connect() -> None:
@@ -75,10 +104,10 @@ async def test_reconnect_retries_then_resubscribes() -> None:
     async def subscribe_registry() -> None:
         attempts.append("registry")
 
-    dashboard.connect = connect  # pyright: ignore[reportAttributeAccessIssue]
-    dashboard.subscribe_to_all_entities = subscribe  # pyright: ignore[reportAttributeAccessIssue]
-    dashboard.subscribe_to_registry_updates = subscribe_registry  # pyright: ignore[reportAttributeAccessIssue]
-    dashboard.set_timer = lambda *a, **k: None  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(dashboard, "connect", connect)
+    monkeypatch.setattr(dashboard, "subscribe_to_all_entities", subscribe)
+    monkeypatch.setattr(dashboard, "subscribe_to_registry_updates", subscribe_registry)
+    monkeypatch.setattr(dashboard, "set_timer", _noop)
 
     await dashboard.reconnect()
 
@@ -101,7 +130,7 @@ def test_ssl_context_only_relaxed_when_insecure_wss() -> None:
     assert not context.check_hostname
 
 
-async def test_connects_wss_with_and_without_insecure(tmp_path: Any) -> None:
+async def test_connects_wss_with_and_without_insecure(tmp_path: Path) -> None:
     import asyncio
     import ssl
     import subprocess
@@ -118,16 +147,16 @@ async def test_connects_wss_with_and_without_insecure(tmp_path: Any) -> None:
     server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server_ctx.load_cert_chain(cert, key)
 
-    async def handler(_: Any) -> None:
+    async def handler(_: ServerConnection) -> None:
         await asyncio.sleep(1)
 
     async with websockets.serve(handler, "localhost", 0, ssl=server_ctx) as server:
-        port = next(iter(server.sockets)).getsockname()[1]
+        port = server_port(server)
         url = f"wss://localhost:{port}"
 
         strict = HomeAssistantDashboard(url, "t")
         try:
-            await strict.get_websocket()
+            _ = await strict.get_websocket()
             raise AssertionError("expected certificate verification to fail")
         except ssl.SSLCertVerificationError:
             pass
@@ -137,27 +166,28 @@ async def test_connects_wss_with_and_without_insecure(tmp_path: Any) -> None:
         await websocket.close()
 
 
-async def test_refresh_layout_rebuilds_and_resubscribes_on_new_entity() -> None:
+async def test_refresh_layout_rebuilds_and_resubscribes_on_new_entity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dashboard = HomeAssistantDashboard("ws://x", "token")
-    sent: list[dict[str, Any]] = []
+    sent: list[Command] = []
     subscribed: list[int] = []
-    light = {"entity_id": "light.a", "state": "on", "attributes": {}}
-    registry: list[dict[str, Any]] = [{"ei": "light.a", "en": "A"}]
-    states = [light]
+    registry: list[DisplayEntityRaw] = [{"ei": "light.a", "en": "A"}]
+    states: list[State] = [make_state("light.a", "on")]
 
-    async def request(command: dict[str, Any]) -> Any:
+    async def request(command: Command, _result_type: type[object]) -> object:
         sent.append(command)
         return {
             "config/entity_registry/list_for_display": {"entities": registry},
             "get_states": states,
-        }.get(command["type"], [])
+        }.get(str(command["type"]), [])
 
     async def subscribe() -> None:
         subscribed.append(1)
 
-    dashboard.request = request  # pyright: ignore[reportAttributeAccessIssue]
-    dashboard.subscribe_to_all_entities = subscribe  # pyright: ignore[reportAttributeAccessIssue]
-    dashboard.notify = lambda *a, **k: None  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setattr(dashboard, "request", request)
+    monkeypatch.setattr(dashboard, "subscribe_to_all_entities", subscribe)
+    monkeypatch.setattr(dashboard, "notify", _noop)
     dashboard.entities_subscription_id = 7
 
     await dashboard.refresh_layout()
@@ -169,7 +199,24 @@ async def test_refresh_layout_rebuilds_and_resubscribes_on_new_entity() -> None:
     assert len(subscribed) == 1  # unchanged layout is left alone
 
     registry.append({"ei": "light.b", "en": "B"})
-    states.append({"entity_id": "light.b", "state": "off", "attributes": {}})
+    states.append(make_state("light.b", "off"))
     await dashboard.refresh_layout()
     assert sorted(dashboard.entity_widget_ids()) == ["light.a", "light.b"]
     assert len(subscribed) == 2
+
+
+def test_parse_keeps_undeclared_keys() -> None:
+    pytest.importorskip("pydantic")
+    raw: JsonObject = {
+        "entity_id": "light.a",
+        "state": "on",
+        "attributes": {"friendly_name": "A", "mystery": 1},
+        "last_changed": "x",
+        "last_reported": "x",
+        "last_updated": "x",
+        "context": {"id": "c", "parent_id": None, "user_id": None},
+        "extra_top_level": True,
+    }
+    [state] = parse(list[State], [raw])
+    assert state["attributes"].get("mystery") == 1
+    assert state.get("extra_top_level") is True

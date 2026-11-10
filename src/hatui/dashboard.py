@@ -1,16 +1,17 @@
 import asyncio
+import importlib
 import json
 import logging
 import ssl
-from collections.abc import Mapping
+from collections.abc import Sequence
 from functools import cache
-from typing import Any, final, override
+from typing import TYPE_CHECKING, cast, final, is_typeddict, override
 
 import websockets
 from textual import work
 from textual.app import App, ComposeResult
-from textual.reactive import Reactive, reactive
 from textual.containers import Vertical
+from textual.reactive import Reactive, reactive
 from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import LoadingIndicator, Static
@@ -21,58 +22,89 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from hatui.hatui_types import (
-    Areas,
+    Area,
+    Command,
     Config,
-    Devices,
+    Device,
+    EntityIcons,
+    EntityIconsResponse,
+    EntityRegistryDisplay,
     HomeAssistantWebsocketAuthRequiredResponse,
     HomeAssistantWebsocketAuthResponse,
-    HomeAssistantWebsocketCommandResponse,
-    HomeAssistantWebsocketEventResponse,
-    HomeAssistantWebsocketResponse,
+    IconsResponse,
+    JsonObject,
+    LovelaceConfig,
     RequestsExpectingResponseQueue,
-    States,
+    ServiceData,
+    State,
     SubscribeEntitiesEvent,
+    TranslationsResponse,
 )
 
 from .camera import CameraSource, CameraWidget, camera_url
-from .more_info import ACTIONS, EntityModal, MoreInfo, build_more_info
 from .entity_widget import CardGrid, EntityWidget, GroupCard
 from .helpers import (
     check_response,
     get_domain_from_entity_id,
+    loads,
 )
 from .lovelace import (
+    AreaPrefs,
     Card,
     DisplayEntity,
     friendly_name,
-    AreaPrefs,
     generate_cards,
-    parse_area_prefs,
     normalise_display_entities,
+    parse_area_prefs,
 )
+from .more_info import ACTIONS, EntityModal, MoreInfo, build_more_info
 from .present import IconSet, present
 from .services import Services
-from .states import StateDict, apply_event
+from .states import apply_event
 from .translate import Translations
 
 logger = logging.getLogger(__name__)
 
-try:
-    from pydantic.type_adapter import (
-        TypeAdapter,  # pyright: ignore[reportMissingImports, reportUnknownVariableType]
-    )
-
-    logger.info("Successfully imported pydantic.")
-except Exception:
-    logger.info("Could not import pydantic, running without it...")
-    TypeAdapter = None  # ty: ignore[invalid-assignment] # hint to the rest of the code that pydantic isn't loaded
+if TYPE_CHECKING:
+    from pydantic import TypeAdapter
 
 
 @cache
-def get_adapter(response_type: Any) -> Any:
-    """Building a TypeAdapter is expensive, so only do it once per type."""
+def has_pydantic() -> bool:
+    """Pydantic is optional: it is not loadable on a Pi 1."""
 
-    return TypeAdapter(response_type)  # pyright: ignore[reportOptionalCall]
+    try:
+        _ = importlib.import_module("pydantic")
+    except Exception:
+        logger.info("Could not import pydantic, running without it...")
+        return False
+    logger.info("Successfully imported pydantic.")
+    return True
+
+
+@cache
+def get_adapter[T](response_type: type[T]) -> "TypeAdapter[T]":
+    """Building a TypeAdapter is expensive, so only do it once per type.
+
+    Home Assistant sends many attributes we do not declare; `extra="allow"` keeps them.
+    """
+
+    from pydantic import ConfigDict, TypeAdapter
+
+    config = ConfigDict(extra="allow")
+    if is_typeddict(response_type):
+        # TypeAdapter rejects `config=` for a bare TypedDict; pydantic reads this attribute instead.
+        setattr(response_type, "__pydantic_config__", config)  # noqa: B010
+        return TypeAdapter(response_type)
+    return TypeAdapter(response_type, config=config)
+
+
+def parse[T](response_type: type[T], data: object, *, strict: bool = False) -> T:
+    """Validate `data` as `response_type`, or trust it where pydantic is unavailable."""
+
+    if has_pydantic():
+        return get_adapter(response_type).validate_python(data, strict=strict)
+    return cast("T", data)
 
 
 REGISTRY_EVENTS = (
@@ -95,17 +127,16 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         self,
         url: str,
         token: str,
-        *args,
+        *,
         insecure: bool = False,
         show_cameras: bool = True,
         camera_interval: float = 10.0,
         camera_live_interval: float = 1.0,
-        **kwargs,
     ):
         self.entities: dict[str, DisplayEntity] = {}
-        self.areas: Areas = []
-        self.devices: Devices = []
-        self.states_by_id: dict[str, StateDict] = {}
+        self.areas: list[Area] = []
+        self.devices: list[Device] = []
+        self.states_by_id: dict[str, State] = {}
         self.config: Config | None = None
         self.icons = IconSet()
         self.translations = Translations()
@@ -126,7 +157,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         self.reconnect_initial_delay = 1.0
         self.reconnect_max_delay = 30.0
         self.websocket: ClientConnection | None = None
-        super().__init__(*args, **kwargs)  # pyright: ignore[reportUnknownArgumentType]
+        super().__init__()
 
     def get_and_increment_command_id(self) -> int:
         command_id = self.command_id
@@ -160,28 +191,24 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
     async def auth(self, token: str) -> None:
         websocket = await self.get_websocket()
 
-        r = await websocket.recv()
-        if TypeAdapter:
-            data = get_adapter(
-                HomeAssistantWebsocketAuthRequiredResponse
-            ).validate_python(json.loads(r), strict=True)
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
+        _ = parse(
+            HomeAssistantWebsocketAuthRequiredResponse,
+            loads(await websocket.recv()),
+            strict=True,
+        )
 
         auth = {
             "type": "auth",
             "access_token": token,
         }
         await websocket.send(json.dumps(auth))
-        r = await websocket.recv()
-        if TypeAdapter:
-            data = get_adapter(HomeAssistantWebsocketAuthResponse).validate_python(
-                json.loads(r), strict=True
-            )
-        else:
-            data = json.loads(r)  # pyright: ignore[reportAny]
-        if not data.get("type") == "auth_ok":
-            logger.error("Auth failed: %s", r)
+        data = parse(
+            HomeAssistantWebsocketAuthResponse,
+            loads(await websocket.recv()),
+            strict=True,
+        )
+        if data["type"] != "auth_ok":
+            logger.error("Auth failed: %s", data)
             raise Exception("Auth failed")
 
         # TODO: ...maybe
@@ -196,11 +223,9 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
         self.authed = True
 
-    async def handle_response[T](
-        self, response: HomeAssistantWebsocketResponse[T]
-    ) -> None:
+    async def handle_response(self, response: JsonObject) -> None:
         id = response.get("id")
-        if not id:
+        if not isinstance(id, int) or not id:
             raise Exception("No ID in response?", response)
 
         callback = self.requests_expecting_response_queue.get(id)
@@ -213,29 +238,31 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
         await callback(response)
 
-    async def fetch(self, requests: list[tuple[dict[str, Any], Any]]) -> list[Any]:
-        """Send all commands up front and collect their (validated) results, in request order."""
+    async def fetch_raw(self, commands: Sequence[Command]) -> list[object]:
+        """Send all commands up front and collect their results, in request order.
+
+        Only safe before the receive worker starts; afterwards use `request`.
+        """
 
         websocket = await self.get_websocket()
         ids: list[int] = []
-        for command, _ in requests:
+        for command in commands:
             command_id = self.get_and_increment_command_id()
             ids.append(command_id)
             await websocket.send(json.dumps({"id": command_id, **command}))
 
-        raw_by_id: dict[int, Any] = {}
+        raw_by_id: dict[int, JsonObject] = {}
         while len(raw_by_id) < len(ids):
-            data = json.loads(await websocket.recv())  # pyright: ignore[reportAny]
-            if data.get("id") in ids:  # pyright: ignore[reportAny]
-                raw_by_id[data["id"]] = data  # pyright: ignore[reportAny]
+            data = loads(await websocket.recv())
+            response_id = data.get("id")
+            if isinstance(response_id, int) and response_id in ids:
+                raw_by_id[response_id] = data
 
-        results: list[Any] = []
-        for command_id, (_, response_type) in zip(ids, requests):
-            data = raw_by_id[command_id]  # pyright: ignore[reportAny]
-            if TypeAdapter:
-                data = get_adapter(response_type).validate_python(data, strict=True)
-            check_response(data)  # pyright: ignore[reportAny]
-            results.append(data["result"])  # pyright: ignore[reportAny]
+        results: list[object] = []
+        for command_id in ids:
+            data = raw_by_id[command_id]
+            check_response(data)
+            results.append(data.get("result"))
         return results
 
     async def load_translations_and_icons(self) -> None:
@@ -243,109 +270,84 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
         language = self.config["language"] if self.config else "en"
         platforms = sorted({e.platform for e in self.entities.values() if e.platform})
-        any_response = HomeAssistantWebsocketCommandResponse[Any]
-        requests: list[tuple[dict[str, Any], Any]] = [
-            (
+        component_tr, entity_tr, component_icons, *entity_icons = await self.fetch_raw(
+            [
                 {
                     "type": "frontend/get_translations",
                     "language": language,
                     "category": "entity_component",
                 },
-                any_response,
-            ),
-            (
                 {
                     "type": "frontend/get_translations",
                     "language": language,
                     "category": "entity",
                     "integration": platforms,
                 },
-                any_response,
-            ),
-            (
                 {"type": "frontend/get_icons", "category": "entity_component"},
-                any_response,
-            ),
-            *[
-                (
+                *[
                     {
                         "type": "frontend/get_icons",
                         "category": "entity",
                         "integration": platform,
-                    },
-                    any_response,
-                )
-                for platform in platforms
-            ],
-        ]
-        component_tr, entity_tr, component_icons, *entity_icons = await self.fetch(
-            requests
+                    }
+                    for platform in platforms
+                ],
+            ]
         )
         self.translations = Translations(
-            {**component_tr["resources"], **entity_tr["resources"]}
+            {
+                **parse(TranslationsResponse, component_tr)["resources"],
+                **parse(TranslationsResponse, entity_tr)["resources"],
+            }
         )
-        entity_icon_resources: dict[str, Any] = {}
+        entity_icon_resources: EntityIcons = {}
         for response in entity_icons:
-            entity_icon_resources.update(response["resources"])
-        self.icons = IconSet(component_icons["resources"], entity_icon_resources)
+            entity_icon_resources.update(
+                parse(EntityIconsResponse, response)["resources"]
+            )
+        self.icons = IconSet(
+            parse(IconsResponse, component_icons)["resources"], entity_icon_resources
+        )
 
     async def load_area_prefs(self) -> AreaPrefs:
         """The dashboard's area order and hidden areas; absent unless the user customised them."""
 
         try:
-            (config,) = await self.fetch(
-                [
-                    (
-                        {"type": "lovelace/config"},
-                        HomeAssistantWebsocketCommandResponse[dict[str, Any]],
-                    )
-                ]
-            )
+            (config,) = await self.fetch_raw([{"type": "lovelace/config"}])
+            return parse_area_prefs(parse(LovelaceConfig, config))
         except Exception as error:  # noqa: BLE001
             logger.info(
                 "No custom dashboard config (%s); using default ordering.", error
             )
             return AreaPrefs()
-        return parse_area_prefs(config)
 
     async def load_registries(self) -> None:
         """Fetch entities, areas, devices, states and config concurrently."""
 
-        entities, areas, devices, states, config = await self.fetch(
+        entities, areas, devices, states, config = await self.fetch_raw(
             [
-                (
-                    {"type": "config/entity_registry/list_for_display"},
-                    HomeAssistantWebsocketCommandResponse[dict[str, Any]],
-                ),
-                (
-                    {"type": "config/area_registry/list"},
-                    HomeAssistantWebsocketCommandResponse[Areas],
-                ),
-                (
-                    {"type": "config/device_registry/list"},
-                    HomeAssistantWebsocketCommandResponse[Devices],
-                ),
-                (
-                    {"type": "get_states"},
-                    HomeAssistantWebsocketCommandResponse[States],
-                ),
-                (
-                    {"type": "get_config"},
-                    HomeAssistantWebsocketCommandResponse[Config],
-                ),
+                {"type": "config/entity_registry/list_for_display"},
+                {"type": "config/area_registry/list"},
+                {"type": "config/device_registry/list"},
+                {"type": "get_states"},
+                {"type": "get_config"},
             ]
         )
-        self.entities = {e.entity_id: e for e in normalise_display_entities(entities)}
-        self.areas = areas
-        self.devices = devices
-        self.states_by_id = {s["entity_id"]: dict(s) for s in states}
-        self.config = config
+        self.entities = {
+            e.entity_id: e
+            for e in normalise_display_entities(parse(EntityRegistryDisplay, entities))
+        }
+        self.areas = parse(list[Area], areas, strict=True)
+        self.devices = parse(list[Device], devices, strict=True)
+        parsed_states = parse(list[State], states, strict=True)
+        self.states_by_id = {s["entity_id"]: s for s in parsed_states}
+        self.config = parse(Config, config, strict=True)
         logger.info(
             "Startup sequence got %d entities, %d areas, %d devices, %d states.",
             len(self.entities),
-            len(areas),
-            len(devices),
-            len(states),
+            len(self.areas),
+            len(self.devices),
+            len(self.states_by_id),
         )
 
     async def send_subscribe_entities(self, entity_ids: list[str]) -> None:
@@ -362,14 +364,13 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         self.entities_subscription_id = request_id
         logger.info("Subscribed to updates for %d entities.", len(entity_ids))
 
-    async def handle_entities_update(
-        self, response: HomeAssistantWebsocketEventResponse[SubscribeEntitiesEvent]
-    ):
+    async def handle_entities_update(self, response: JsonObject) -> None:
         if response.get("type") == "result" and response.get("success"):
             logger.info("Got subscription acknowledgement...")
-            return None
-        else:
-            return await self.update_dashboard_with_entity_updates(response["event"])
+            return
+        await self.update_dashboard_with_entity_updates(
+            parse(SubscribeEntitiesEvent, response.get("event"))
+        )
 
     async def subscribe_to_registry_updates(self) -> None:
         websocket = await self.get_websocket()
@@ -388,8 +389,8 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 self.handle_registry_event
             )
 
-    async def handle_registry_event(self, response: Any) -> None:
-        if response.get("type") != "event":  # pyright: ignore[reportAny]
+    async def handle_registry_event(self, response: JsonObject) -> None:
+        if response.get("type") != "event":
             return
         logger.info("Registry changed, scheduling a layout refresh.")
         if self.registry_timer:
@@ -399,8 +400,8 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
     def build_cards(self) -> list[Card]:
         return generate_cards(
-            self.areas,  # pyright: ignore[reportArgumentType]
-            self.devices,  # pyright: ignore[reportArgumentType]
+            self.areas,
+            self.devices,
             list(self.entities.values()),
             list(self.states_by_id.values()),
             self.translations.domain_name,
@@ -414,22 +415,24 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         async with self.refresh_lock:
             try:
                 entities, areas, devices, states = await asyncio.gather(
-                    self.request({"type": "config/entity_registry/list_for_display"}),
-                    self.request({"type": "config/area_registry/list"}),
-                    self.request({"type": "config/device_registry/list"}),
-                    self.request({"type": "get_states"}),
+                    self.request(
+                        {"type": "config/entity_registry/list_for_display"},
+                        EntityRegistryDisplay,
+                    ),
+                    self.request({"type": "config/area_registry/list"}, list[Area]),
+                    self.request({"type": "config/device_registry/list"}, list[Device]),
+                    self.request({"type": "get_states"}, list[State]),
                 )
             except Exception as e:
                 logger.warning("Layout refresh failed: %s", e)
                 return
 
             self.entities = {
-                e.entity_id: e
-                for e in normalise_display_entities(entities)  # pyright: ignore[reportAny]
+                e.entity_id: e for e in normalise_display_entities(entities)
             }
-            self.areas = areas  # pyright: ignore[reportAny]
-            self.devices = devices  # pyright: ignore[reportAny]
-            self.states_by_id = {s["entity_id"]: dict(s) for s in states}  # pyright: ignore[reportAny]
+            self.areas = areas
+            self.devices = devices
+            self.states_by_id = {s["entity_id"]: s for s in states}
 
             cards = self.build_cards()
             if not cards or cards == self.cards:
@@ -448,43 +451,44 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 title="󰑓 Layout updated",
             )
             if self.entities_subscription_id is not None:
-                self.requests_expecting_response_queue.pop(
+                _ = self.requests_expecting_response_queue.pop(
                     self.entities_subscription_id, None
                 )
                 try:
-                    await self.request(
+                    _ = await self.request(
                         {
                             "type": "unsubscribe_events",
                             "subscription": self.entities_subscription_id,
-                        }
+                        },
+                        object,
                     )
                 except Exception as e:
                     logger.warning("Could not unsubscribe: %s", e)
             await self.subscribe_to_all_entities()
 
-    async def request(self, command: dict[str, Any]) -> Any:
+    async def request[T](self, command: Command, result_type: type[T]) -> T:
         """Send one command and await its result; safe once the receive worker is running."""
 
         websocket = await self.get_websocket()
         command_id = self.get_and_increment_command_id()
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
 
-        async def resolve(response: Any) -> None:  # pyright: ignore[reportAny]
-            if response.get("success"):  # pyright: ignore[reportAny]
-                future.set_result(response.get("result"))  # pyright: ignore[reportAny]
+        async def resolve(response: JsonObject) -> None:
+            if response.get("success"):
+                future.set_result(response.get("result"))
             else:
                 future.set_exception(Exception("Request failed", response))
 
         self.requests_expecting_response_queue[command_id] = resolve
         await websocket.send(json.dumps({"id": command_id, **command}))
-        return await asyncio.wait_for(future, timeout=30)
+        return parse(result_type, await asyncio.wait_for(future, timeout=30))
 
     async def call_service(
         self,
         domain: str,
         service: str,
         entity_id: str,
-        data: dict[str, Any] | None = None,
+        data: ServiceData | None = None,
     ) -> None:
         _ = await self.request(
             {
@@ -493,7 +497,8 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 "service": service,
                 "service_data": data or {},
                 "target": {"entity_id": entity_id},
-            }
+            },
+            object,
         )
 
     def present_entity(self, entity_id: str):
@@ -506,7 +511,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         )
 
     async def update_dashboard_with_entity_updates(self, event: SubscribeEntitiesEvent):
-        added, changed = apply_event(self.states_by_id, event)  # pyright: ignore[reportArgumentType]
+        added, changed = apply_event(self.states_by_id, event)
         if changed or len(added) > 1:
             logger.info(
                 "Got updates: %d additions and %d changes.", len(added), len(changed)
@@ -521,7 +526,8 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                         animate=entity_id in changed,
                     )
 
-        screen = self.screen
+        # Textual types the screen as Screen[object], which can never narrow to a ModalScreen[None]
+        screen = cast("object", self.screen)
         if isinstance(screen, EntityModal) and screen.entity_id in added | changed:
             screen.refresh_content()
 
@@ -557,9 +563,9 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, self.reconnect_max_delay)
 
-    async def wait_for_responses(self) -> Any:
+    async def wait_for_responses(self) -> JsonObject:
         websocket = await self.get_websocket()
-        return json.loads(await websocket.recv())  # pyright: ignore[reportAny]
+        return loads(await websocket.recv())
 
     @work(exclusive=True)
     async def receive_responses_and_handle(self):
@@ -629,7 +635,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
 
     async def on_mount(self):
         # let the loading screen paint before any blocking network or parsing work
-        self.call_after_refresh(self.start_up)
+        _ = self.call_after_refresh(self.start_up)
 
     async def start_up(self):
         if not self.websocket:
@@ -664,8 +670,16 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         if service:
             await self.call_service(domain, service, entity_id)
 
-    def get_state(self, entity_id: str) -> Mapping[str, Any]:
-        return self.states_by_id.get(entity_id) or {}
+    def get_state(self, entity_id: str) -> State:
+        return self.states_by_id.get(entity_id) or State(
+            entity_id=entity_id,
+            state=None,
+            attributes={},
+            last_changed=None,
+            last_reported=None,
+            last_updated=None,
+            context=None,
+        )
 
     def build_more_info(self, entity_id: str) -> MoreInfo:
         entity = self.entities.get(entity_id)
@@ -673,7 +687,7 @@ class HomeAssistantDashboard(App):  # pyright: ignore[reportMissingTypeArgument]
         return build_more_info(
             entity,
             entity_id,
-            friendly_name(entity_id, state or {}),
+            friendly_name(entity_id, state),
             state,
             self.present_entity(entity_id),
             self.translations,

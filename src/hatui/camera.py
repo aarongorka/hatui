@@ -1,18 +1,21 @@
+# rich's Text.append returns self for chaining; assigning every call to `_` would only add noise.
+# pyright: reportUnusedCallResult=false
 import asyncio
 import io
 import logging
 import ssl
 import urllib.request
 from dataclasses import dataclass
-from typing import final, override
+from http.client import HTTPResponse
+from typing import cast, final, override
 from urllib.parse import urlsplit, urlunsplit
 
 from PIL import Image
 from rich.color import Color
 from rich.style import Style
 from rich.text import Text
-from textual.app import ComposeResult
 from textual import work
+from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Static
@@ -35,8 +38,12 @@ def fetch_snapshot(
     url: str, token: str, context: ssl.SSLContext | None = None
 ) -> bytes:
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT, context=context) as r:  # noqa: S310
-        return r.read()
+    response = cast(
+        "HTTPResponse",
+        urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT, context=context),
+    )
+    with response:
+        return response.read()
 
 
 def image_to_text(data: bytes, columns: int, rows: int) -> Text:
@@ -44,7 +51,7 @@ def image_to_text(data: bytes, columns: int, rows: int) -> Text:
 
     image = Image.open(io.BytesIO(data))
     # JPEG draft mode decodes at reduced size, which matters a lot on a Pi 1
-    image.draft("RGB", (columns * 2, rows * 4))
+    _ = image.draft("RGB", (columns * 2, rows * 4))
     image = image.convert("RGB")
     image.thumbnail((columns, rows * 2), Image.Resampling.BILINEAR)
     width, height = image.size
@@ -81,9 +88,9 @@ class CameraFeed(Static):
 
     def __init__(self, source: CameraSource, interval: float, rows: int | None) -> None:
         super().__init__("Loading…", classes="picture", markup=False)
-        self.source = source
-        self.interval = interval
-        self.rows = rows
+        self.source: CameraSource = source
+        self.interval: float = interval
+        self.rows: int | None = rows
 
     def on_mount(self) -> None:
         _ = self.poll()
@@ -105,7 +112,7 @@ class CameraFeed(Static):
                 failures += 1
                 logger.warning("Camera %s frame failed: %s", source.entity_id, e)
                 self.update("󰗿 Camera unavailable")
-            await asyncio.sleep(self.interval * min(2**failures, 8))
+            await asyncio.sleep(self.interval * min(1 << failures, 8))
 
 
 @final
@@ -144,4 +151,4 @@ class CameraWidget(Vertical):
         yield CameraFeed(self.source, self.source.interval, rows=CAMERA_ROWS)
 
     def on_click(self) -> None:
-        _ = self.app.push_screen(CameraScreen(self.source))
+        _ = self.app.push_screen(CameraScreen(self.source))  # pyright: ignore[reportUnknownMemberType]  # Textual types Widget.app as App[Unknown]

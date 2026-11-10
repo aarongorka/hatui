@@ -1,14 +1,16 @@
-from typing import Any
+import nerdfont  # pyright: ignore[reportMissingTypeStubs]
 
+from hatui.hatui_types import State
 from hatui.lovelace import DisplayEntity
 from hatui.present import IconSet, present, resolve_icon_name, state_colour
 from hatui.states import apply_event
 from hatui.translate import Translations
-import nerdfont  # pyright: ignore[reportMissingTypeStubs]
+
+from .factories import make_state
 
 
-def _state(state: str, **attrs: Any) -> dict[str, Any]:
-    return {"state": state, "attributes": attrs}
+def _state(state: str, **attrs: object) -> State:
+    return make_state("sensor.x", state, None, **attrs)
 
 
 def test_number_formatting_uses_precision_unit_and_never_prints_none() -> None:
@@ -129,7 +131,7 @@ def test_colours_follow_lovelace_rules() -> None:
 
 
 def test_apply_event_merges_diffs_and_removals() -> None:
-    store: dict[str, Any] = {}
+    store: dict[str, State] = {}
     _ = apply_event(
         store,
         {

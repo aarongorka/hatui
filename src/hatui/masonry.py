@@ -1,6 +1,8 @@
-from textual.layouts.factory import LAYOUT_MAP
+from typing import ClassVar, override
+
 from textual.geometry import NULL_OFFSET, Region, Size, Spacing
 from textual.layout import ArrangeResult, Layout, WidgetPlacement
+from textual.layouts.factory import LAYOUT_MAP
 from textual.widget import Widget
 
 
@@ -14,13 +16,14 @@ def column_layout(width: int, min_column_width: int, gap: int) -> tuple[int, int
 class MasonryLayout(Layout):
     """Responsive columns where each child goes in to the currently shortest column, like Lovelace."""
 
-    name = "masonry"
+    name: ClassVar[str] = "masonry"
 
     def __init__(self, min_column_width: int = 44, gap: int = 1) -> None:
         super().__init__()
-        self.min_column_width = min_column_width
-        self.gap = gap
+        self.min_column_width: int = min_column_width
+        self.gap: int = gap
 
+    @override
     def arrange(
         self,
         parent: Widget,
@@ -32,7 +35,7 @@ class MasonryLayout(Layout):
         columns, column_width = column_layout(
             size.width, self.min_column_width, self.gap
         )
-        viewport = parent.app.viewport_size
+        viewport = parent.app.viewport_size  # pyright: ignore[reportUnknownMemberType]  # Textual types Widget.app as App[Unknown]
         heights = [0] * columns
         placements: list[WidgetPlacement] = []
 

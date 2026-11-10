@@ -3,8 +3,8 @@ from typing import final, override
 
 from textual.app import ComposeResult
 from textual.color import Color
-from textual.events import Click
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static

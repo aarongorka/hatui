@@ -3,7 +3,15 @@
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+
+from .hatui_types import (
+    Area,
+    Device,
+    EntityRegistryDisplay,
+    LovelaceConfig,
+    LovelaceStrategy,
+    State,
+)
 
 HIDE_DOMAINS = frozenset(
     {
@@ -92,16 +100,17 @@ class AreaPrefs:
     hide_entities_without_area: bool = False
 
 
-def parse_area_prefs(config: Mapping[str, Any] | None) -> AreaPrefs:
+def parse_area_prefs(config: LovelaceConfig | None) -> AreaPrefs:
     """Read the `original-states` strategy options out of a `lovelace/config` result."""
 
-    strategy: Mapping[str, Any] = (config or {}).get("strategy") or {}
+    root: LovelaceConfig = config or {}
+    strategy: LovelaceStrategy = root.get("strategy") or {}
     if not strategy:
-        views = (config or {}).get("views") or []
+        views = root.get("views") or []
         strategy = (views[0].get("strategy") if views else None) or {}
     if strategy.get("type") != "original-states":
         return AreaPrefs()
-    areas: Mapping[str, Any] = strategy.get("areas") or {}
+    areas = strategy.get("areas") or {}
     return AreaPrefs(
         list(areas.get("order") or []),
         list(areas.get("hidden") or []),
@@ -126,13 +135,13 @@ def domain_of(entity_id: str) -> str:
     return entity_id.split(".", 1)[0]
 
 
-def normalise_display_entities(result: Mapping[str, Any]) -> list[DisplayEntity]:
+def normalise_display_entities(result: EntityRegistryDisplay) -> list[DisplayEntity]:
     """Expand the compressed `config/entity_registry/list_for_display` response."""
 
-    categories: Mapping[str, str] = result.get("entity_categories", {})
+    categories = result.get("entity_categories", {})
     entities: list[DisplayEntity] = []
     for raw in result.get("entities", []):
-        entity_id = raw.get("ei")
+        entity_id = raw["ei"]
         if not entity_id:
             continue
         category = raw.get("ec")
@@ -159,17 +168,17 @@ def prettify_entity_id(entity_id: str) -> str:
     return entity_id.split(".", 1)[1].replace("_", " ").title()
 
 
-def friendly_name(entity_id: str, state: Mapping[str, Any]) -> str:
-    name = state.get("attributes", {}).get("friendly_name")
-    return str(name) if name else prettify_entity_id(entity_id)
+def friendly_name(entity_id: str, state: State | None) -> str:
+    name = state["attributes"].get("friendly_name") if state else None
+    return name or prettify_entity_id(entity_id)
 
 
-def device_title(device: Mapping[str, Any]) -> str:
+def device_title(device: Device) -> str:
     return device.get("name_by_user") or device.get("name") or "Unnamed device"
 
 
 def name_within_device(
-    entity: DisplayEntity | None, state: Mapping[str, Any], device_name: str
+    entity: DisplayEntity | None, state: State, device_name: str
 ) -> str:
     """Name of an entity without its device's name, as shown on a device card."""
 
@@ -203,7 +212,7 @@ def _row_sort_key(row: CardRow) -> tuple[bool, list[tuple[int, int, str]]]:
 
 def _rows(
     entity_ids: Iterable[str],
-    state_by_id: Mapping[str, Mapping[str, Any]],
+    state_by_id: Mapping[str, State],
     entity_by_id: Mapping[str, DisplayEntity],
     device_name: str | None = None,
 ) -> list[CardRow]:
@@ -219,10 +228,10 @@ def _rows(
 
 
 def generate_cards(
-    areas: Sequence[Mapping[str, Any]],
-    devices: Sequence[Mapping[str, Any]],
+    areas: Sequence[Area],
+    devices: Sequence[Device],
     entities: list[DisplayEntity],
-    states: Sequence[Mapping[str, Any]],
+    states: Sequence[State],
     domain_name: DomainName,
     show_cameras: bool = False,
     prefs: AreaPrefs | None = None,
@@ -271,11 +280,13 @@ def generate_cards(
         (a for a in areas if a.get("area_id") not in prefs.hidden),
         key=lambda a: area_position.get(str(a.get("area_id")), len(area_position)),
     )
-    area_cards = [
-        Card(a["name"], _rows(area_buckets[a["area_id"]], state_by_id, entity_by_id))
-        for a in ordered_areas
-        if a.get("area_id") in area_buckets and a.get("name")
-    ]
+    area_cards: list[Card] = []
+    for area in ordered_areas:
+        area_id, name = area["area_id"], area["name"]
+        if area_id in area_buckets and name:
+            area_cards.append(
+                Card(name, _rows(area_buckets[area_id], state_by_id, entity_by_id))
+            )
 
     groups = sorted(
         (e for e in ungrouped if domain_of(e) == "group"),
@@ -285,12 +296,13 @@ def generate_cards(
     grouped: set[str] = set()
     for group_id in groups:
         state = state_by_id[group_id]
+        member_ids: list[str] = state["attributes"].get("entity_id") or []
         members = [
             m
-            for m in state["attributes"].get("entity_id") or []
+            for m in member_ids
             if m in state_by_id and is_visible(entity_by_id.get(m), m, show_cameras)
         ]
-        grouped.update(state["attributes"].get("entity_id") or [])
+        grouped.update(member_ids)
         group_cards.append(
             Card(
                 friendly_name(group_id, state),

@@ -7,6 +7,8 @@ from hatui.camera import camera_url, image_to_text
 from hatui.lovelace import DisplayEntity, generate_cards
 from hatui.translate import Translations
 
+from .factories import make_state
+
 
 def _png(width: int, height: int, colour: tuple[int, int, int]) -> bytes:
     buffer = io.BytesIO()
@@ -37,7 +39,7 @@ def test_image_is_scaled_to_fit_and_uses_half_blocks() -> None:
 
 def test_cameras_only_appear_when_enabled() -> None:
     entities = [DisplayEntity("camera.door")]
-    states = [{"entity_id": "camera.door", "state": "idle", "attributes": {}}]
+    states = [make_state("camera.door", "idle")]
     name = Translations().domain_name
 
     assert generate_cards([], [], entities, states, name) == []

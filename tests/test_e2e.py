@@ -2,24 +2,28 @@ import json
 import ssl
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import websockets
+from websockets.asyncio.server import ServerConnection
 
 from hatui.dashboard import HomeAssistantDashboard
 from hatui.entity_widget import EntityWidget, GroupCard
+from hatui.hatui_types import JsonObject
+from hatui.helpers import loads
 
-DISPLAY_ENTITIES: dict[str, Any] = {
+from .factories import server_port
+
+DISPLAY_ENTITIES: JsonObject = {
     "entity_categories": {"0": "config"},
     "entities": [{"ei": "light.desk", "pl": "demo", "en": "Desk"}],
 }
 
-STATE: dict[str, Any] = {
+STATE: JsonObject = {
     "entity_id": "light.desk", "state": "on", "attributes": {},
     "last_changed": None, "last_reported": None, "last_updated": None, "context": {},
 }  # fmt: skip
 
-CONFIG: dict[str, Any] = {
+CONFIG: JsonObject = {
     "allowlist_external_dirs": [], "allowlist_external_urls": [], "components": [],
     "config_dir": "", "config_source": "", "country": "x" * 2_000_000,  # bigger than websockets' default 1 MiB frame limit
      "currency": "",
@@ -33,7 +37,7 @@ CONFIG: dict[str, Any] = {
     "version": "1", "whitelist_external_dirs": [],
 }  # fmt: skip
 
-RESULTS: dict[str, Any] = {
+RESULTS: dict[str, JsonObject | list[JsonObject]] = {
     "config/entity_registry/list_for_display": DISPLAY_ENTITIES,
     "config/area_registry/list": [],
     "config/device_registry/list": [],
@@ -44,13 +48,13 @@ RESULTS: dict[str, Any] = {
 }
 
 
-async def fake_home_assistant(ws: Any) -> None:
+async def fake_home_assistant(ws: ServerConnection) -> None:
     await ws.send(json.dumps({"type": "auth_required", "ha_version": "1"}))
     _ = await ws.recv()
     await ws.send(json.dumps({"type": "auth_ok", "ha_version": "1"}))
     async for message in ws:
-        command = json.loads(message)
-        result = RESULTS.get(command["type"])
+        command = loads(message)
+        result = RESULTS.get(str(command["type"]))
         await ws.send(
             json.dumps(
                 {
@@ -77,9 +81,9 @@ async def test_app_starts_against_self_signed_wss_with_insecure(tmp_path: Path) 
     async with websockets.serve(
         fake_home_assistant, "localhost", 0, ssl=server_ctx
     ) as s:
-        port = next(iter(s.sockets)).getsockname()[1]
+        port = server_port(s)
         app = HomeAssistantDashboard(f"wss://localhost:{port}", "t", insecure=True)
-        async with app.run_test() as pilot:
+        async with app.run_test() as pilot:  # pyright: ignore[reportUnknownVariableType]  # HomeAssistantDashboard subclasses an unparameterised App
             for _ in range(50):
                 await pilot.pause(0.1)
                 if app.entity_widgets:

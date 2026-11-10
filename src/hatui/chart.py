@@ -1,3 +1,5 @@
+# rich's Text.append returns self for chaining; assigning every call to `_` would only add noise.
+# pyright: reportUnusedCallResult=false
 import datetime
 from collections.abc import Callable, Sequence
 

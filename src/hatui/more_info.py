@@ -1,25 +1,34 @@
-import datetime
+# rich's Text.append returns self for chaining; assigning every call to `_` would only add noise.
+# pyright: reportUnusedCallResult=false
 import asyncio
+import datetime
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, final, override
+from typing import final, override
 
 import humanize
-from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
 from rich.style import Style
 from rich.text import Text
 from textual import work
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widget import Widget
 from textual.widgets import Button, Static
 
 from .chart import PALETTE, line_chart, timeline
+from .hatui_types import (
+    ForecastResult,
+    HistoryEntry,
+    LogbookEvent,
+    State,
+    StateAttributes,
+)
 from .history import (
-    NO_HISTORY_DOMAINS,
     LINE_ATTRIBUTES,
+    NO_HISTORY_DOMAINS,
     history_kind,
     numeric_points,
     parse_history,
@@ -30,6 +39,7 @@ from .lovelace import DisplayEntity, domain_of
 from .media import MediaControls
 from .present import Presentation, state_colour
 from .services import Services
+from .translate import Translations
 from .weather import (
     condition_glyph,
     condition_name,
@@ -37,7 +47,6 @@ from .weather import (
     forecast_rows,
     forecast_type,
 )
-from .translate import Translations
 
 HIDDEN_ATTRIBUTES = frozenset(
     {"friendly_name", "icon", "entity_picture", "supported_features", "editable"}
@@ -59,16 +68,16 @@ class MoreInfo:
     entity_id: str = ""
 
 
-def _format_value(value: Any) -> str:
+def _format_value(value: object) -> str:
     if isinstance(value, bool):
         return str(value).lower()
     if isinstance(value, (list, dict)):
         value = json.dumps(value, separators=(",", ":"), default=str)
-    text = str(value)  # pyright: ignore[reportAny]
+    text = str(value)
     return text if len(text) <= MAX_VALUE_LENGTH else text[: MAX_VALUE_LENGTH - 1] + "…"
 
 
-def _ago(raw: Any, now: datetime.datetime) -> str | None:
+def _ago(raw: object, now: datetime.datetime) -> str | None:
     """`last_changed` is an ISO string from `get_states` and epoch seconds from events."""
 
     try:
@@ -89,7 +98,7 @@ def build_more_info(
     entity: DisplayEntity | None,
     entity_id: str,
     name: str,
-    state: Mapping[str, Any] | None,
+    state: State | None,
     presentation: Presentation,
     translations: Translations,
     now: datetime.datetime | None = None,
@@ -97,7 +106,7 @@ def build_more_info(
     now = now or datetime.datetime.now()
     domain = domain_of(entity_id)
     raw = (state.get("state") if state else None) or ""
-    attributes: Mapping[str, Any] = (state.get("attributes") if state else None) or {}
+    attributes: StateAttributes = state["attributes"] if state else {}
     unit = attributes.get("unit_of_measurement")
 
     translated = translations.state(
@@ -115,11 +124,12 @@ def build_more_info(
     )
 
     rows: list[tuple[str, str]] = []
+    loose: Mapping[str, object] = attributes
     changed = _ago(state.get("last_changed"), now) if state else None
     updated = _ago(state.get("last_updated"), now) if state else None
     rows.extend(
         (key.replace("_", " ").capitalize(), _format_value(value))
-        for key, value in sorted(attributes.items())
+        for key, value in sorted(loose.items())
         if key not in HIDDEN_ATTRIBUTES and value is not None
     )
     return MoreInfo(
@@ -133,7 +143,7 @@ LOGBOOK_ROWS = 30
 CHART_HEIGHT = 8
 
 
-def logbook_lines(events: list[dict[str, Any]], now: datetime.datetime) -> list[str]:
+def logbook_lines(events: list[LogbookEvent], now: datetime.datetime) -> list[str]:
     """Newest first, as Lovelace's logbook shows them."""
 
     lines: list[str] = []
@@ -178,7 +188,7 @@ class EntityModal(ModalScreen[None]):
         build: Callable[[str], MoreInfo],
         activate: Callable[[str], Awaitable[None]],
         services: Services,
-        get_state: Callable[[str], Mapping[str, Any]],
+        get_state: Callable[[str], State],
     ) -> None:
         super().__init__()
         self.entity_id = entity_id
@@ -227,9 +237,9 @@ class EntityModal(ModalScreen[None]):
         if self.domain not in NO_HISTORY_DOMAINS:
             self.chart.update("Loading…")
             self.logbook.update("Loading…")
-            self.load_history()
+            _ = self.load_history()
         if self.domain == "weather":
-            self.load_forecast()
+            _ = self.load_forecast()
 
     def refresh_content(self) -> None:
         info = self.build(self.entity_id)
@@ -249,14 +259,14 @@ class EntityModal(ModalScreen[None]):
             "\n".join(f"{key:<{width}}  {value}" for key, value in info.rows)
         )
 
-    def show_weather(
-        self, state: Mapping[str, Any], forecast: list[str] | None = None
-    ) -> None:
-        attributes: Mapping[str, Any] = state.get("attributes") or {}
+    def show_weather(self, state: State, forecast: list[str] | None = None) -> None:
+        attributes = state["attributes"]
         unit = attributes.get("temperature_unit") or ""
+        condition = (
+            f"{condition_glyph(state['state'])}  {condition_name(state['state'])}"
+        )
         lines = [
-            f"{condition_glyph(state.get('state'))}  {condition_name(state.get('state'))}"
-            f"   {attributes.get('temperature', '')}{unit}",
+            f"{condition}   {attributes.get('temperature', '')}{unit}",
             "",
         ]
         width = max((len(k) for k, _ in detail_rows(attributes)), default=0)
@@ -272,7 +282,7 @@ class EntityModal(ModalScreen[None]):
     @work(exclusive=True, group="forecast")
     async def load_forecast(self) -> None:
         state = self.get_state(self.entity_id)
-        attributes: Mapping[str, Any] = state.get("attributes") or {}
+        attributes = state["attributes"]
         kind = forecast_type(attributes)
         if not kind:
             return
@@ -285,10 +295,11 @@ class EntityModal(ModalScreen[None]):
                     "target": {"entity_id": self.entity_id},
                     "service_data": {"type": kind},
                     "return_response": True,
-                }
+                },
+                ForecastResult,
             )
             items = result["response"][self.entity_id]["forecast"]
-        except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as error:
             if isinstance(error, asyncio.CancelledError):
                 raise
             self.show_weather(state, ["Forecast unavailable"])
@@ -301,7 +312,6 @@ class EntityModal(ModalScreen[None]):
     async def load_history(self) -> None:
         end = time.time()
         start = end - HISTORY_HOURS * 3600
-        iso = lambda t: datetime.datetime.fromtimestamp(t, datetime.UTC).isoformat()  # noqa: E731
         history, events = await asyncio.gather(
             self.services.request(
                 {
@@ -312,7 +322,8 @@ class EntityModal(ModalScreen[None]):
                     "minimal_response": True,
                     "no_attributes": False,
                     "significant_changes_only": False,
-                }
+                },
+                dict[str, list[HistoryEntry]],
             ),
             self.services.request(
                 {
@@ -320,7 +331,8 @@ class EntityModal(ModalScreen[None]):
                     "start_time": iso(start),
                     "end_time": iso(end),
                     "entity_ids": [self.entity_id],
-                }
+                },
+                list[LogbookEvent],
             ),
             return_exceptions=True,
         )
@@ -337,7 +349,7 @@ class EntityModal(ModalScreen[None]):
             self.logbook.update("\n".join(lines) or "No events in the last 24 hours")
 
     def render_chart(
-        self, entries: list[dict[str, Any]], start: float, end: float
+        self, entries: list[HistoryEntry], start: float, end: float
     ) -> Text | str:
         samples = parse_history(entries)
         if not samples:
@@ -372,3 +384,7 @@ class EntityModal(ModalScreen[None]):
             await self.activate(self.entity_id)
         elif event.button.id == "more-info-close":
             _ = self.dismiss()
+
+
+def iso(timestamp: float) -> str:
+    return datetime.datetime.fromtimestamp(timestamp, datetime.UTC).isoformat()

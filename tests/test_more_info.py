@@ -2,25 +2,25 @@ import datetime
 
 from hatui.lovelace import DisplayEntity
 from hatui.more_info import build_more_info
-from hatui.present import present
-from hatui.present import IconSet
+from hatui.present import IconSet, present
 from hatui.translate import Translations
+
+from .factories import make_state
 
 NOW = datetime.datetime(2026, 1, 1, 12, 0, 0)
 
 
 def _info(entity_id: str, state: str, **extra: object):
-    st = {
-        "state": state,
-        "attributes": {
-            "friendly_name": "X",
-            "icon": "mdi:x",
-            "brightness": 10,
-            **extra,
-        },
-        "last_changed": NOW.timestamp() - 3600,
-        "last_updated": "2026-01-01T11:59:00",
-    }
+    st = make_state(
+        entity_id,
+        state,
+        friendly_name="X",
+        icon="mdi:x",
+        brightness=10,
+        **extra,
+    )
+    st["last_changed"] = NOW.timestamp() - 3600
+    st["last_updated"] = "2026-01-01T11:59:00"
     tr = Translations()
     entity = DisplayEntity(entity_id)
     return build_more_info(

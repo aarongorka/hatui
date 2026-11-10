@@ -21,6 +21,8 @@ dev = [
     "pydantic>=2.12.5",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
+    "ty>=0.0.100",
+    "pre-commit>=4.7.0",
 ]
 
 [project.optional-dependencies]

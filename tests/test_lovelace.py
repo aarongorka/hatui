@@ -1,7 +1,7 @@
-from typing import Any
-
+from hatui.hatui_types import EntityRegistryDisplay, LovelaceConfig, State
 from hatui.lovelace import (
     AreaPrefs,
+    Card,
     DisplayEntity,
     generate_cards,
     natural_key,
@@ -10,27 +10,24 @@ from hatui.lovelace import (
 )
 from hatui.translate import Translations
 
-
-def _state(entity_id: str, name: str | None = None, **attrs: Any) -> dict[str, Any]:
-    attributes = {"friendly_name": name} if name else {}
-    return {
-        "entity_id": entity_id,
-        "state": "on",
-        "attributes": {**attributes, **attrs},
-    }
+from .factories import make_area, make_device, make_state
 
 
-def _titles(cards: list[Any]) -> dict[str, list[str]]:
+def _state(entity_id: str, name: str | None = None, **attrs: object) -> State:
+    return make_state(entity_id, "on", name, **attrs)
+
+
+def _titles(cards: list[Card]) -> dict[str, list[str]]:
     return {c.title: [r.entity_id for r in c.rows] for c in cards}
 
 
 def test_normalise_expands_compressed_registry() -> None:
-    result = {
+    result: EntityRegistryDisplay = {
         "entity_categories": {"0": "config", "1": "diagnostic"},
         "entities": [
             {"ei": "sensor.a", "pl": "x", "di": "d1", "ec": 1, "hb": True, "dp": 2},
             {"ei": "light.b"},
-            {"pl": "no-id"},
+            {"ei": ""},
         ],
     }
 
@@ -43,13 +40,13 @@ def test_normalise_expands_compressed_registry() -> None:
 
 
 def test_cards_follow_lovelace_grouping_filtering_and_order() -> None:
-    areas = [{"area_id": "kitchen", "name": "Kitchen"}]
+    areas = [make_area("kitchen", "Kitchen")]
     devices = [
-        {"id": "d1", "name": "Lamp", "area_id": "kitchen"},
-        {"id": "d2", "name": "Hub", "name_by_user": "Zed Hub", "area_id": None},
-        {"id": "d3", "name": "Solo", "area_id": None},
-        {"id": "d4", "name": "Twin", "area_id": None},
-        {"id": "d5", "name": "Twin", "area_id": None},
+        make_device("d1", "Lamp", "kitchen"),
+        make_device("d2", "Hub", name_by_user="Zed Hub"),
+        make_device("d3", "Solo"),
+        make_device("d4", "Twin"),
+        make_device("d5", "Twin"),
     ]
     entities = [
         DisplayEntity("light.direct", area_id="kitchen"),
@@ -95,8 +92,8 @@ def test_cards_follow_lovelace_grouping_filtering_and_order() -> None:
 
 def test_duplicate_device_names_keep_all_entities() -> None:
     devices = [
-        {"id": "d1", "name": "Dyson", "area_id": None},
-        {"id": "d2", "name": "Dyson", "area_id": None},
+        make_device("d1", "Dyson"),
+        make_device("d2", "Dyson"),
     ]
     entities = [
         DisplayEntity("sensor.a1", device_id="d1"),
@@ -112,7 +109,7 @@ def test_duplicate_device_names_keep_all_entities() -> None:
 
 
 def test_device_card_rows_drop_device_name_prefix() -> None:
-    devices = [{"id": "d1", "name": "Heater", "area_id": None}]
+    devices = [make_device("d1", "Heater")]
     entities = [
         DisplayEntity("sensor.heater_power", device_id="d1"),
         DisplayEntity("switch.heater", device_id="d1"),
@@ -134,11 +131,11 @@ def test_natural_key_orders_numbers_and_case_like_the_frontend() -> None:
 
 def test_order_is_areas_groups_people_domains_devices() -> None:
     areas = [
-        {"area_id": "a1", "name": "Attic"},
-        {"area_id": "a2", "name": "Bath"},
-        {"area_id": "a3", "name": "Cellar"},
+        make_area("a1", "Attic"),
+        make_area("a2", "Bath"),
+        make_area("a3", "Cellar"),
     ]
-    devices = [{"id": "d1", "name": "Hub", "area_id": None}]
+    devices = [make_device("d1", "Hub")]
     entities = [
         DisplayEntity("light.a", area_id="a1"),
         DisplayEntity("light.b", area_id="a2"),
@@ -150,10 +147,7 @@ def test_order_is_areas_groups_people_domains_devices() -> None:
         _state("person.zed", "Zed"),
         _state("fan.f", "Fan"),
         _state("light.grouped", "Grouped"),
-        {
-            **_state("group.living", "Living"),
-            "attributes": {"friendly_name": "Living", "entity_id": ["light.grouped"]},
-        },
+        make_state("group.living", "on", "Living", entity_id=["light.grouped"]),
     ]
     prefs = AreaPrefs(order=["a3", "a1"], hidden=["a2"])
 
@@ -167,7 +161,7 @@ def test_order_is_areas_groups_people_domains_devices() -> None:
 
 
 def test_parse_area_prefs() -> None:
-    config = {
+    config: LovelaceConfig = {
         "strategy": {
             "type": "original-states",
             "areas": {"order": ["b"], "hidden": ["c"]},
@@ -175,5 +169,5 @@ def test_parse_area_prefs() -> None:
         }
     }
     assert parse_area_prefs(config) == AreaPrefs(["b"], ["c"], True)
-    assert parse_area_prefs({"views": [{"cards": []}]}) == AreaPrefs()
+    assert parse_area_prefs({"views": [{}]}) == AreaPrefs()
     assert parse_area_prefs(None) == AreaPrefs()

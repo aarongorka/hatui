@@ -1,5 +1,13 @@
-from collections.abc import Callable
-from typing import Any, Literal, NotRequired, TypedDict
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Literal, NotRequired, Protocol, TypedDict
+
+# Covariant containers so that e.g. a `list[str]` is a valid `JsonValue`.
+type JsonValue = (
+    str | int | float | bool | None | Sequence[JsonValue] | Mapping[str, JsonValue]
+)
+type JsonObject = Mapping[str, JsonValue]
+type Command = JsonObject
+type ServiceData = JsonObject
 
 type HomeAssistantWebsocketResponseType = Literal["result", "event"]
 
@@ -50,11 +58,11 @@ type HomeAssistantWebsocketResponse[T] = (
     | HomeAssistantWebsocketAuthResponse
     | HomeAssistantWebsocketEventResponse[T]
     | HomeAssistantWebsocketSubscribeResponse
-    | HomeAssistantWebsocketEventResponse[T]
 )
 
 
-type RequestsExpectingResponseQueue = dict[int, Callable[..., Any]]
+type ResponseCallback = Callable[[JsonObject], Awaitable[None]]
+type RequestsExpectingResponseQueue = dict[int, ResponseCallback]
 
 
 class ConfigUnitSystem(TypedDict):
@@ -98,7 +106,7 @@ class Device(TypedDict):
     configuration_url: str | None
     config_entries: list[str] | None
     config_entries_subentries: dict[str, list[str | None]] | None
-    connections: list[Any] | None
+    connections: list[list[str]] | None
     created_at: float | None
     disabled_by: str | None
     entry_type: str | None
@@ -143,6 +151,38 @@ class StateAttributes(TypedDict):
     brightness: NotRequired[int | None]
     hs_color: NotRequired[list[float] | None]
     rgb_color: NotRequired[list[int] | None]
+    entity_picture: NotRequired[str | None]
+    order: NotRequired[float | None]
+    entity_id: NotRequired[list[str] | None]  # members of a group
+    effect_list: NotRequired[list[str] | None]
+    min_color_temp_kelvin: NotRequired[int | None]
+    max_color_temp_kelvin: NotRequired[int | None]
+    color_temp_kelvin: NotRequired[int | None]
+    media_title: NotRequired[str | None]
+    media_artist: NotRequired[str | None]
+    media_series_title: NotRequired[str | None]
+    media_album_name: NotRequired[str | None]
+    media_position: NotRequired[float | None]
+    media_duration: NotRequired[float | None]
+    volume_level: NotRequired[float | None]
+    is_volume_muted: NotRequired[bool | None]
+    source: NotRequired[str | None]
+    source_list: NotRequired[list[str] | None]
+    temperature: NotRequired[float | None]
+    temperature_unit: NotRequired[str | None]
+    humidity: NotRequired[float | None]
+    pressure: NotRequired[float | None]
+    pressure_unit: NotRequired[str | None]
+    wind_speed: NotRequired[float | None]
+    wind_speed_unit: NotRequired[str | None]
+    wind_bearing: NotRequired[float | str | None]
+    visibility: NotRequired[float | None]
+    visibility_unit: NotRequired[str | None]
+    dew_point: NotRequired[float | None]
+    cloud_coverage: NotRequired[float | None]
+    uv_index: NotRequired[float | None]
+    current_temperature: NotRequired[float | None]
+    current_humidity: NotRequired[float | None]
 
 
 type Context = str | dict[str, str | None] | None
@@ -152,9 +192,9 @@ class State(TypedDict):
     entity_id: str
     state: str | None
     attributes: StateAttributes
-    last_changed: str | None
-    last_reported: str | None
-    last_updated: str | None
+    last_changed: str | float | None  # ISO from `get_states`, epoch seconds from events
+    last_reported: str | float | None
+    last_updated: str | float | None
     context: Context
 
 
@@ -164,7 +204,7 @@ type StatesByEntityId = dict[str, State]
 
 class Entity(TypedDict):
     area_id: str | None
-    categories: dict[str, Any] | None
+    categories: dict[str, str] | None
     config_entry_id: str | None
     config_subentry_id: str | None
     created_at: float | None
@@ -179,7 +219,7 @@ class Entity(TypedDict):
     labels: list[str] | None
     modified_at: float | None
     name: str | None
-    options: dict[str, dict[str, Any]] | None
+    options: dict[str, dict[str, object]] | None
     original_name: str | None
     platform: str | None
     translation_key: str | None
@@ -223,6 +263,17 @@ class IconsResponse(TypedDict):
     resources: Icons
 
 
+type EntityIcons = dict[str, Icons]  # platform -> domain -> translation key
+
+
+class EntityIconsResponse(TypedDict):
+    resources: EntityIcons
+
+
+class TranslationsResponse(TypedDict):
+    resources: dict[str, str]
+
+
 class IconQuery(TypedDict):
     category: str
     integration: NotRequired[str]
@@ -245,13 +296,17 @@ type SubscribeEntitiesEventAddedEntities = dict[
 ]
 
 
-class SubscribedEntitiesEventChanged(
-    TypedDict(
-        "SubscribeEntitiesEventChanged",
-        {"+": SubscribeEntitiesEventEntityDetails},
-    )
-):
-    pass
+class SubscribeEntitiesEventRemovedDetails(TypedDict):
+    a: NotRequired[list[str]]  # names of removed attributes
+
+
+SubscribedEntitiesEventChanged = TypedDict(
+    "SubscribedEntitiesEventChanged",
+    {
+        "+": NotRequired[SubscribeEntitiesEventEntityDetails],
+        "-": NotRequired[SubscribeEntitiesEventRemovedDetails],
+    },
+)
 
 
 type SubscribeEntitiesEventChangedEntities = dict[
@@ -268,3 +323,85 @@ class SubscribeEntitiesEvent(TypedDict):
 class ServiceResponse(TypedDict):
     context: Context
     response: None
+
+
+class DisplayEntityRaw(TypedDict):
+    """One compressed row of `config/entity_registry/list_for_display`."""
+
+    ei: str  # entity id
+    pl: NotRequired[str | None]  # platform
+    di: NotRequired[str | None]  # device id
+    ai: NotRequired[str | None]  # area id
+    tk: NotRequired[str | None]  # translation key
+    ec: NotRequired[int | None]  # entity category, an index in to `entity_categories`
+    en: NotRequired[str | None]  # entity name
+    dp: NotRequired[int | None]  # display precision
+    ic: NotRequired[str | None]  # icon
+    hb: NotRequired[bool | None]  # hidden
+
+
+class EntityRegistryDisplay(TypedDict):
+    entities: list[DisplayEntityRaw]
+    entity_categories: NotRequired[dict[str, str]]
+
+
+class LovelaceAreasStrategy(TypedDict):
+    order: NotRequired[list[str] | None]
+    hidden: NotRequired[list[str] | None]
+
+
+class LovelaceStrategy(TypedDict):
+    type: NotRequired[str]
+    areas: NotRequired[LovelaceAreasStrategy | None]
+    hide_entities_without_area: NotRequired[bool | None]
+
+
+class LovelaceView(TypedDict):
+    strategy: NotRequired[LovelaceStrategy | None]
+
+
+class LovelaceConfig(TypedDict):
+    strategy: NotRequired[LovelaceStrategy | None]
+    views: NotRequired[list[LovelaceView] | None]
+
+
+class HistoryEntry(TypedDict):
+    """Compressed `history/history_during_period` row; attributes are sent only when they change."""
+
+    s: NotRequired[str]  # state
+    a: NotRequired[StateAttributes]
+    lc: NotRequired[float]  # last changed
+    lu: NotRequired[float]  # last updated
+
+
+type HistoryResult = dict[str, list[HistoryEntry]]
+
+
+class LogbookEvent(TypedDict):
+    when: NotRequired[float]
+    message: NotRequired[str | None]
+    state: NotRequired[str | None]
+
+
+class ForecastItem(TypedDict):
+    datetime: NotRequired[str]
+    condition: NotRequired[str | None]
+    temperature: NotRequired[float | None]
+    templow: NotRequired[float | None]
+    precipitation_probability: NotRequired[float | None]
+
+
+class EntityForecast(TypedDict):
+    forecast: list[ForecastItem]
+
+
+class ForecastResult(TypedDict):
+    response: dict[str, EntityForecast]
+
+
+class RequestFunction(Protocol):
+    """Send one command and get its result, validated as `result_type` when pydantic is available."""
+
+    def __call__[T](
+        self, command: Command, result_type: type[T], /
+    ) -> Awaitable[T]: ...

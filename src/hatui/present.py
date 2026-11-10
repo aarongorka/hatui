@@ -2,14 +2,13 @@
 
 import datetime
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cache
-from typing import Any
 
 import humanize
 import nerdfont  # pyright: ignore[reportMissingTypeStubs]
 
+from .hatui_types import EntityIcons, IconResourceType, Icons, State, StateAttributes
 from .helpers import (
     fallback_domain_icons,
     mdi_nf_mapping,
@@ -157,12 +156,8 @@ MUTED_STATES = INACTIVE_STATES | {"locked"}
 class IconSet:
     """Icon definitions: `component[domain][device_class|"_"]` and `entity[platform][domain][translation_key]`."""
 
-    component: Mapping[str, Mapping[str, Any]] = field(
-        default_factory=dict[str, Mapping[str, Any]]
-    )
-    entity: Mapping[str, Mapping[str, Mapping[str, Any]]] = field(
-        default_factory=dict[str, Mapping[str, Mapping[str, Any]]]
-    )
+    component: Icons = field(default_factory=dict)
+    entity: EntityIcons = field(default_factory=dict)
 
 
 @dataclass
@@ -173,10 +168,10 @@ class Presentation:
     state_classes: str
 
 
-def _pick(resource: Mapping[str, Any] | None, state: str | None) -> str | None:
+def _pick(resource: IconResourceType | None, state: str | None) -> str | None:
     if not resource:
         return None
-    by_state: Mapping[str, str] = resource.get("state") or {}
+    by_state = resource.get("state") or {}
     return (state and by_state.get(state)) or resource.get("default")
 
 
@@ -184,14 +179,15 @@ def resolve_icon_name(
     entity: DisplayEntity | None,
     entity_id: str,
     state: str | None,
-    attributes: Mapping[str, Any],
+    attributes: StateAttributes,
     icons: IconSet,
 ) -> str:
     domain = domain_of(entity_id)
     if entity and entity.icon:
         return entity.icon
-    if attributes.get("icon"):
-        return str(attributes["icon"])
+    icon = attributes.get("icon")
+    if icon:
+        return icon
 
     if entity and entity.platform and entity.translation_key:
         platform_icons = icons.entity.get(entity.platform, {}).get(domain, {})
@@ -249,7 +245,7 @@ def _scale(hex_colour: str, factor: float) -> str:
 
 
 def state_colour(
-    entity_id: str, state: str | None, attributes: Mapping[str, Any]
+    entity_id: str, state: str | None, attributes: StateAttributes
 ) -> str | None:
     """Port of the frontend's `stateColorCss`; None means the default text colour."""
 
@@ -331,7 +327,7 @@ def render_state(
     entity: DisplayEntity | None,
     entity_id: str,
     state: str | None,
-    attributes: Mapping[str, Any],
+    attributes: StateAttributes,
     translations: Translations,
 ) -> str:
     domain = domain_of(entity_id)
@@ -375,12 +371,12 @@ def render_state(
 def present(
     entity: DisplayEntity | None,
     entity_id: str,
-    state: Mapping[str, Any] | None,
+    state: State | None,
     icons: IconSet,
     translations: Translations,
 ) -> Presentation:
     raw = state.get("state") if state else None
-    attributes: Mapping[str, Any] = (state.get("attributes") if state else None) or {}
+    attributes: StateAttributes = state["attributes"] if state else {}
     return Presentation(
         icon=glyph(resolve_icon_name(entity, entity_id, raw, attributes, icons)),
         colour=state_colour(entity_id, raw, attributes),

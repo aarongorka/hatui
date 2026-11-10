@@ -1,3 +1,5 @@
+# rich's Text.append returns self for chaining; assigning every call to `_` would only add noise.
+# pyright: reportUnusedCallResult=false
 from collections.abc import Callable
 from typing import final, override
 
@@ -36,7 +38,7 @@ class ClickBar(Widget):
         if self.dragging:
             return
         self.value = min(max(value, 0.0), 1.0)
-        self.refresh()
+        _ = self.refresh()
 
     def _value_at(self, x: int) -> float:
         return min(max((x + 0.5) / max(self.size.width, 1), 0.0), 1.0)
@@ -58,7 +60,7 @@ class ClickBar(Widget):
 
     def _set_from(self, x: int) -> None:
         self.value = self._value_at(x)
-        self.refresh()
+        _ = self.refresh()
 
     def on_mouse_down(self, event: MouseDown) -> None:
         if not self.interactive:

@@ -1,18 +1,25 @@
+import json
 import logging
+from collections.abc import Mapping
 from functools import cache
+from typing import cast
 
 import nerdfont  # pyright: ignore[reportMissingTypeStubs]
 
-from .hatui_types import (
-    HomeAssistantWebsocketResponse,
-    HomeAssistantWebsocketResponseType,
-)
+from .hatui_types import HomeAssistantWebsocketResponseType, JsonObject
 
 logger = logging.getLogger(__name__)
 
 
-def check_response[T](
-    data: HomeAssistantWebsocketResponse[T],
+def loads(raw: str | bytes) -> JsonObject:
+    """Decode a websocket frame; `json.loads` is typed `Any`, but frames are always objects."""
+
+    parsed: object = json.loads(raw)  # pyright: ignore[reportAny]  # json.loads is typed Any
+    return cast("JsonObject", parsed)
+
+
+def check_response(
+    data: Mapping[str, object],
     expected_type: HomeAssistantWebsocketResponseType = "result",
 ) -> None:
     """Check a few things in the websocket response from HomeAssistant for validity."""

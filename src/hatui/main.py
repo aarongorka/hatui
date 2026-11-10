@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import logging
 import os
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 
@@ -92,7 +92,7 @@ def run(
         root.setLevel(logging.DEBUG)
 
     dashboard = get_dashboard(insecure, cameras, camera_interval, camera_live_interval)
-    _ = dashboard.run()
+    _ = cast("object", dashboard.run())
 
 
 if __name__ == "__main__":

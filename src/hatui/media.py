@@ -1,11 +1,11 @@
-from collections.abc import Mapping
-from typing import Any, final, override
+from typing import final, override
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Select, Static
 
 from .click_bar import ClickBar
+from .hatui_types import State, StateAttributes
 from .services import Services
 
 PAUSE, SEEK, VOLUME_SET, VOLUME_MUTE = 1, 2, 4, 8
@@ -14,8 +14,8 @@ PLAYING_STATES = ("playing", "paused", "buffering", "idle", "on")
 OFF_STATES = ("off", "unavailable", "unknown")
 
 
-def supports(attributes: Mapping[str, Any], feature: int) -> bool:
-    return bool(int(attributes.get("supported_features") or 0) & feature)
+def supports(attributes: StateAttributes, feature: int) -> bool:
+    return bool((attributes.get("supported_features") or 0) & feature)
 
 
 def duration_text(seconds: float | None) -> str:
@@ -26,37 +26,35 @@ def duration_text(seconds: float | None) -> str:
     return f"{hours}:{minutes:02}:{secs:02}" if hours else f"{minutes}:{secs:02}"
 
 
-def progress_fraction(attributes: Mapping[str, Any]) -> float | None:
+def progress_fraction(attributes: StateAttributes) -> float | None:
     position, duration = (
         attributes.get("media_position"),
         attributes.get("media_duration"),
     )
     if position is None or not duration:
         return None
-    return min(max(float(position) / float(duration), 0.0), 1.0)
+    return min(max(position / duration, 0.0), 1.0)
 
 
-def now_playing(attributes: Mapping[str, Any]) -> list[str]:
+def now_playing(attributes: StateAttributes) -> list[str]:
     parts = (
         attributes.get("media_title"),
         attributes.get("media_artist") or attributes.get("media_series_title"),
         attributes.get("media_album_name"),
     )
-    return [str(p) for p in parts if p]  # pyright: ignore[reportAny]
+    return [p for p in parts if p]
 
 
 @final
 class MediaControls(Vertical):
     """Now playing, transport buttons, volume, source and progress."""
 
-    def __init__(
-        self, entity_id: str, state: Mapping[str, Any], services: Services
-    ) -> None:
+    def __init__(self, entity_id: str, state: State, services: Services) -> None:
         super().__init__(id="media-controls")
         self.entity_id = entity_id
         self.services = services
         self.duration = 0.0
-        attributes: Mapping[str, Any] = state.get("attributes") or {}
+        attributes = state["attributes"]
         self.info = Static("", id="media-info", markup=False)
         self.progress_text = Static("", id="media-progress-text", markup=False)
         self.progress = ClickBar(
@@ -67,12 +65,13 @@ class MediaControls(Vertical):
         )
         self.volume_row = Horizontal(classes="control-row", id="media-volume-row")
         self.volume = ClickBar(
-            float(attributes.get("volume_level") or 0),
+            attributes.get("volume_level") or 0.0,
             lambda _: "#4caf50",
             id="media-volume",
         )
+        source_list = attributes.get("source_list") or []
         self.sources = Select[str](
-            [(str(s), str(s)) for s in attributes.get("source_list") or []],
+            [(s, s) for s in source_list],
             prompt="Source",
             id="media-source",
         )
@@ -95,8 +94,8 @@ class MediaControls(Vertical):
         yield self.progress
         yield self.sources
 
-    def sync(self, state: Mapping[str, Any]) -> None:
-        attributes: Mapping[str, Any] = state.get("attributes") or {}
+    def sync(self, state: State) -> None:
+        attributes = state["attributes"]
         on = state.get("state") not in OFF_STATES
         self.info.update("\n".join(now_playing(attributes)) or "Nothing playing")
         self.buttons["previous"].display = on and supports(attributes, PREVIOUS)
@@ -106,16 +105,15 @@ class MediaControls(Vertical):
         self.buttons["mute"].display = on and supports(attributes, VOLUME_MUTE)
         self.buttons["mute"].label = "🔇" if attributes.get("is_volume_muted") else "🔈"
         self.volume_row.display = on and supports(attributes, VOLUME_SET)
-        self.volume.set_value(float(attributes.get("volume_level") or 0))
+        self.volume.set_value(attributes.get("volume_level") or 0.0)
         fraction = progress_fraction(attributes)
         self.duration = float(attributes.get("media_duration") or 0)
         self.progress.display = self.progress_text.display = on and fraction is not None
         if fraction is not None:
             self.progress.set_value(fraction)
-            self.progress_text.update(
-                f"{duration_text(attributes.get('media_position'))} / "
-                f"{duration_text(attributes.get('media_duration'))}"
-            )
+            position = duration_text(attributes.get("media_position"))
+            duration = duration_text(attributes.get("media_duration"))
+            self.progress_text.update(f"{position} / {duration}")
         self.sources.display = (
             on
             and bool(attributes.get("source_list"))
@@ -123,7 +121,7 @@ class MediaControls(Vertical):
         )
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        event.stop()
+        _ = event.stop()
         service = {
             "media-previous": "media_previous_track",
             "media-play": "media_play_pause",
@@ -141,7 +139,7 @@ class MediaControls(Vertical):
             )
 
     async def on_click_bar_committed(self, message: ClickBar.Committed) -> None:
-        message.stop()
+        _ = message.stop()
         if message.bar is self.volume:
             await self.services.call(
                 "media_player",
@@ -158,7 +156,7 @@ class MediaControls(Vertical):
             )
 
     async def on_select_changed(self, message: Select.Changed) -> None:
-        message.stop()
+        _ = message.stop()
         if isinstance(message.value, str):
             await self.services.call(
                 "media_player",
