@@ -1,5 +1,4 @@
 import asyncio
-import importlib
 import json
 import logging
 import ssl
@@ -66,31 +65,27 @@ from .translate import Translations
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pydantic import TypeAdapter
+    from pydantic import TypeAdapter as PydanticTypeAdapter
 
+try:
+    from pydantic import ConfigDict, TypeAdapter
 
-@cache
-def has_pydantic() -> bool:
-    """Pydantic is optional: it is not loadable on a Pi 1."""
-
-    try:
-        _ = importlib.import_module("pydantic")
-    except Exception:
-        logger.info("Could not import pydantic, running without it...")
-        return False
     logger.info("Successfully imported pydantic.")
-    return True
+except Exception:
+    logger.info("Could not import pydantic, running without it...")
+    ConfigDict = None
+    TypeAdapter = None
 
 
 @cache
-def get_adapter[T](response_type: type[T]) -> "TypeAdapter[T]":
+def get_adapter[T](response_type: type[T]) -> "PydanticTypeAdapter[T]":
     """Building a TypeAdapter is expensive, so only do it once per type.
 
     Home Assistant sends many attributes we do not declare; `extra="allow"` keeps them.
     """
 
-    from pydantic import ConfigDict, TypeAdapter
-
+    if ConfigDict is None or TypeAdapter is None:
+        raise RuntimeError("pydantic is not available")
     config = ConfigDict(extra="allow")
     if is_typeddict(response_type):
         # TypeAdapter rejects `config=` for a bare TypedDict; pydantic reads this attribute instead.
@@ -102,7 +97,7 @@ def get_adapter[T](response_type: type[T]) -> "TypeAdapter[T]":
 def parse[T](response_type: type[T], data: object, *, strict: bool = False) -> T:
     """Validate `data` as `response_type`, or trust it where pydantic is unavailable."""
 
-    if has_pydantic():
+    if TypeAdapter is not None:
         return get_adapter(response_type).validate_python(data, strict=strict)
     return cast("T", data)
 

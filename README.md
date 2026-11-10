@@ -28,7 +28,7 @@ A Terminal User Interface (TUI) Home Assistant dashboard using the Textual libra
 ## Usage
 
 ```shell
-pipx install git+https://github.com/aarongorka/hatui.git
+uv tool install git+https://github.com/aarongorka/hatui.git # or `pipx install [...]`
 export HATUI_WS_URL=ws://<your HA hostname>:8123/api/websocket
 export HATUI_TOKEN=<token obtained from your profile on the left sidebar -> security tab -> long-lived access tokens>
 hatui
